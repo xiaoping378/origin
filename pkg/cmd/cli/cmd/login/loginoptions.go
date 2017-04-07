@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -138,12 +139,8 @@ func (o *LoginOptions) getClientConfig() (*restclient.Config, error) {
 		case tls.RecordHeaderError:
 			return nil, clientcmd.GetPrettyErrorForServer(err, o.Server)
 		default:
-			// suggest the port used in the cluster URL by default, in case we're not already using it
-			host, port, parsed, err1 := getHostPort(o.Server)
-			_, defaultClusterPort, _, err2 := getHostPort(defaultClusterURL)
-			if err1 == nil && err2 == nil && port != defaultClusterPort {
-				parsed.Host = net.JoinHostPort(host, defaultClusterPort)
-				return nil, fmt.Errorf("%s\nYou may want to try using the default cluster port: %s", err.Error(), parsed.String())
+			if _, ok := err.(*net.OpError); ok {
+				return nil, fmt.Errorf("%v - verify you have provided the correct host and port and that the server is currently running.", err)
 			}
 			return nil, err
 		}
@@ -228,6 +225,13 @@ func (o *LoginOptions) gatherAuthInfo() error {
 	clientConfig.KeyFile = o.KeyFile
 	token, err := tokencmd.RequestToken(o.Config, o.Reader, o.Username, o.Password)
 	if err != nil {
+		// if internal error occurs, suggest making sure
+		// client is connecting to the right host:port
+		if statusErr, ok := err.(*kerrors.StatusError); ok {
+			if statusErr.Status().Code == http.StatusInternalServerError {
+				return fmt.Errorf("error: The server was unable to respond - verify you have provided the correct host and port and that the server is currently running.")
+			}
+		}
 		return err
 	}
 	clientConfig.BearerToken = token
@@ -265,7 +269,7 @@ func (o *LoginOptions) gatherProjectInfo() error {
 	projectsList, err := oClient.Projects().List(kapi.ListOptions{})
 	// if we're running on kube (or likely kube), just set it to "default"
 	if kerrors.IsNotFound(err) || kerrors.IsForbidden(err) {
-		fmt.Fprintf(o.Out, "Using \"default\".  You can switch projects with '%s project <projectname>':\n\n", o.CommandName)
+		fmt.Fprintf(o.Out, "Using \"default\".  You can switch projects with:\n\n '%s project <projectname>'\n", o.CommandName)
 		o.Project = "default"
 		return nil
 	}

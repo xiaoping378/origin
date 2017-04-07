@@ -97,7 +97,10 @@ os::cmd::expect_success_and_text 'oc start-build --list-webhooks=all bc/ruby-sam
 os::cmd::expect_success_and_text 'oc start-build --list-webhooks=all ruby-sample-build' 'github'
 os::cmd::expect_success_and_text 'oc start-build --list-webhooks=github ruby-sample-build' 'secret101'
 os::cmd::expect_failure 'oc start-build --list-webhooks=blah'
-os::cmd::expect_success "oc start-build --from-webhook='$(oc start-build --list-webhooks='generic' ruby-sample-build --api-version=v1 | head -n 1)'"
+os::cmd::expect_success_and_text "oc start-build --from-webhook='$(oc start-build --list-webhooks='generic' ruby-sample-build --api-version=v1 | head -n 1)'" "build \"ruby-sample-build-[0-9]\" started"
+os::cmd::expect_failure_and_text "oc start-build --from-webhook='$(oc start-build --list-webhooks='generic' ruby-sample-build --api-version=v1 | head -n 1)/foo'" "error: server rejected our request"
+os::cmd::expect_success "oc patch bc/ruby-sample-build -p '{\"spec\":{\"strategy\":{\"dockerStrategy\":{\"from\":{\"name\":\"asdf:7\"}}}}}'"
+os::cmd::expect_failure_and_text "oc start-build --from-webhook='$(oc start-build --list-webhooks='generic' ruby-sample-build --api-version=v1 | head -n 1)'" "Error resolving ImageStreamTag asdf:7"
 os::cmd::expect_success 'oc get builds'
 os::cmd::expect_success 'oc delete all -l build=docker'
 echo "buildConfig: ok"
@@ -121,6 +124,7 @@ os::test::junit::declare_suite_end
 os::test::junit::declare_suite_start "cmd/builds/cancel-build"
 os::cmd::expect_success_and_text "oc cancel-build ${started} --dump-logs --restart" "restarted build \"${started}\""
 os::cmd::expect_success 'oc delete all --all'
+os::cmd::expect_success 'oc delete secret dbsecret'
 os::cmd::expect_success 'oc process -f examples/sample-app/application-template-dockerbuild.json -l build=docker | oc create -f -'
 os::cmd::try_until_success 'oc get build/ruby-sample-build-1'
 # Uses type/name resource syntax to cancel the build and check for proper message
@@ -140,6 +144,7 @@ done
 # Running this command again when all builds are cancelled should be no-op.
 os::cmd::expect_success 'oc cancel-build bc/ruby-sample-build'
 os::cmd::expect_success 'oc delete all --all'
+os::cmd::expect_success 'oc delete secret dbsecret'
 echo "cancel-build: ok"
 os::test::junit::declare_suite_end
 

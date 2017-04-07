@@ -396,47 +396,6 @@ func TestValidateBuildUpdate(t *testing.T) {
 	}
 }
 
-func TestBuildConfigGitSourceWithProxyFailure(t *testing.T) {
-	proxyAddress := "127.0.0.1:3128"
-	buildConfig := &buildapi.BuildConfig{
-		ObjectMeta: kapi.ObjectMeta{Name: "config-id", Namespace: "namespace"},
-		Spec: buildapi.BuildConfigSpec{
-			RunPolicy: buildapi.BuildRunPolicySerial,
-			CommonSpec: buildapi.CommonSpec{
-				Source: buildapi.BuildSource{
-					Git: &buildapi.GitBuildSource{
-						URI: "git://github.com/my/repository",
-						ProxyConfig: buildapi.ProxyConfig{
-							HTTPProxy:  &proxyAddress,
-							HTTPSProxy: &proxyAddress,
-						},
-					},
-				},
-				Strategy: buildapi.BuildStrategy{
-					DockerStrategy: &buildapi.DockerBuildStrategy{},
-				},
-				Output: buildapi.BuildOutput{
-					To: &kapi.ObjectReference{
-						Kind: "DockerImage",
-						Name: "repository/data",
-					},
-				},
-			},
-		},
-	}
-	errors := ValidateBuildConfig(buildConfig)
-	if len(errors) != 1 {
-		t.Errorf("Expected one error, got %d", len(errors))
-	}
-	err := errors[0]
-	if err.Type != field.ErrorTypeInvalid {
-		t.Errorf("Expected invalid value validation error, got %q", err.Type)
-	}
-	if err.Detail != "only http:// and https:// GIT protocols are allowed with HTTP or HTTPS proxy set" {
-		t.Errorf("Exptected git:// protocol with proxy validation error, got: %q", err.Detail)
-	}
-}
-
 // TestBuildConfigDockerStrategyImageChangeTrigger ensures that it is invalid to
 // have a BuildConfig with Docker strategy and an ImageChangeTrigger where
 // neither DockerStrategy.From nor ImageChange.From are defined.
@@ -1204,6 +1163,8 @@ func TestValidateSource(t *testing.T) {
 }
 
 func TestValidateStrategy(t *testing.T) {
+	badPolicy := buildapi.ImageOptimizationPolicy("Unknown")
+	goodPolicy := buildapi.ImageOptimizationNone
 	errorCases := []struct {
 		t        field.ErrorType
 		path     string
@@ -1220,6 +1181,21 @@ func TestValidateStrategy(t *testing.T) {
 				DockerStrategy:          &buildapi.DockerBuildStrategy{},
 				CustomStrategy:          &buildapi.CustomBuildStrategy{},
 				JenkinsPipelineStrategy: &buildapi.JenkinsPipelineBuildStrategy{},
+			},
+		},
+		// 1
+		{
+			t:    field.ErrorTypeInvalid,
+			path: "dockerStrategy.imageOptimizationPolicy",
+			strategy: &buildapi.BuildStrategy{
+				DockerStrategy: &buildapi.DockerBuildStrategy{ImageOptimizationPolicy: &badPolicy},
+			},
+		},
+		// 1
+		{
+			ok: true,
+			strategy: &buildapi.BuildStrategy{
+				DockerStrategy: &buildapi.DockerBuildStrategy{ImageOptimizationPolicy: &goodPolicy},
 			},
 		},
 	}
@@ -1896,6 +1872,29 @@ func TestValidateCommonSpec(t *testing.T) {
 			},
 		},
 		// 32
+		// jenkins strategy env fields can't use valueFrom syntax
+		{
+			string(field.ErrorTypeInvalid) + "strategy.jenkinsPipelineStrategy.env[0].valueFrom",
+			buildapi.CommonSpec{
+				Source: buildapi.BuildSource{
+					Git: &buildapi.GitBuildSource{
+						URI: "http://github.com/my/repository",
+					},
+				},
+				Strategy: buildapi.BuildStrategy{
+					JenkinsPipelineStrategy: &buildapi.JenkinsPipelineBuildStrategy{
+						JenkinsfilePath: "myJenkinsfile",
+						Env: []kapi.EnvVar{
+							{
+								Name:      "key",
+								ValueFrom: &kapi.EnvVarSource{},
+							},
+						},
+					},
+				},
+			},
+		},
+		// 33
 		{
 			string(field.ErrorTypeRequired) + "output.imageLabels[0].name",
 			buildapi.CommonSpec{
@@ -1917,7 +1916,7 @@ func TestValidateCommonSpec(t *testing.T) {
 				},
 			},
 		},
-		// 33
+		// 34
 		{
 			string(field.ErrorTypeInvalid) + "output.imageLabels[0].name",
 			buildapi.CommonSpec{
@@ -1939,7 +1938,7 @@ func TestValidateCommonSpec(t *testing.T) {
 				},
 			},
 		},
-		// 34
+		// 35
 		// duplicate labels
 		{
 			string(field.ErrorTypeInvalid) + "output.imageLabels[1].name",
@@ -1966,7 +1965,7 @@ func TestValidateCommonSpec(t *testing.T) {
 				},
 			},
 		},
-		// 35
+		// 36
 		// nonconsecutive duplicate labels
 		{
 			string(field.ErrorTypeInvalid) + "output.imageLabels[3].name",
@@ -2005,7 +2004,7 @@ func TestValidateCommonSpec(t *testing.T) {
 				},
 			},
 		},
-		// 36
+		// 37
 		// invalid nodeselector
 		{
 			string(field.ErrorTypeInvalid) + "nodeSelector[A@B!]",
@@ -2231,7 +2230,7 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 				},
 			},
 		},
-		// 6
+		// 8
 		{
 			CommonSpec: buildapi.CommonSpec{
 				Source: buildapi.BuildSource{
@@ -2247,7 +2246,7 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 				},
 			},
 		},
-		// 7
+		// 9
 		{
 			CommonSpec: buildapi.CommonSpec{
 				Source: buildapi.BuildSource{
@@ -2263,7 +2262,7 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 				},
 			},
 		},
-		// 8
+		// 10
 		{
 			CommonSpec: buildapi.CommonSpec{
 				Source: buildapi.BuildSource{
@@ -2283,7 +2282,7 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 				},
 			},
 		},
-		// 9
+		// 11
 		{
 			CommonSpec: buildapi.CommonSpec{
 				Source: buildapi.BuildSource{
@@ -2304,7 +2303,7 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 				},
 			},
 		},
-		// 10
+		// 12
 		{
 			CommonSpec: buildapi.CommonSpec{
 				Source: buildapi.BuildSource{
@@ -2316,6 +2315,27 @@ func TestValidateCommonSpecSuccess(t *testing.T) {
 					DockerStrategy: &buildapi.DockerBuildStrategy{},
 				},
 				NodeSelector: map[string]string{"A": "B", "C": "D"},
+			},
+		},
+		// 13
+		{
+			buildapi.CommonSpec{
+				Source: buildapi.BuildSource{
+					Git: &buildapi.GitBuildSource{
+						URI: "http://github.com/my/repository",
+					},
+				},
+				Strategy: buildapi.BuildStrategy{
+					JenkinsPipelineStrategy: &buildapi.JenkinsPipelineBuildStrategy{
+						JenkinsfilePath: "myJenkinsfile",
+						Env: []kapi.EnvVar{
+							{
+								Name:  "key",
+								Value: "value",
+							},
+						},
+					},
+				},
 			},
 		},
 	}
@@ -2456,6 +2476,66 @@ func TestValidateTrigger(t *testing.T) {
 			},
 			expected: []*field.Error{field.Invalid(field.NewPath("github", "allowEnv"), "", "")},
 		},
+		"GitLab type with no gitlab webhook": {
+			trigger:  buildapi.BuildTriggerPolicy{Type: buildapi.GitLabWebHookBuildTriggerType},
+			expected: []*field.Error{field.Required(field.NewPath("gitlab"), "")},
+		},
+		"GitLab trigger with no secret": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type:          buildapi.GitLabWebHookBuildTriggerType,
+				GitLabWebHook: &buildapi.WebHookTrigger{},
+			},
+			expected: []*field.Error{field.Required(field.NewPath("gitlab", "secret"), "")},
+		},
+		"GitLab trigger with generic webhook": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.GitLabWebHookBuildTriggerType,
+				GenericWebHook: &buildapi.WebHookTrigger{
+					Secret: "secret101",
+				},
+			},
+			expected: []*field.Error{field.Required(field.NewPath("gitlab"), "")},
+		},
+		"GitLab trigger with allow env": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.GitLabWebHookBuildTriggerType,
+				GitLabWebHook: &buildapi.WebHookTrigger{
+					Secret:   "secret101",
+					AllowEnv: true,
+				},
+			},
+			expected: []*field.Error{field.Invalid(field.NewPath("gitlab", "allowEnv"), "", "")},
+		},
+		"Bitbucket type with no Bitbucket webhook": {
+			trigger:  buildapi.BuildTriggerPolicy{Type: buildapi.BitbucketWebHookBuildTriggerType},
+			expected: []*field.Error{field.Required(field.NewPath("bitbucket"), "")},
+		},
+		"Bitbucket trigger with no secret": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type:             buildapi.BitbucketWebHookBuildTriggerType,
+				BitbucketWebHook: &buildapi.WebHookTrigger{},
+			},
+			expected: []*field.Error{field.Required(field.NewPath("bitbucket", "secret"), "")},
+		},
+		"Bitbucket trigger with generic webhook": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.BitbucketWebHookBuildTriggerType,
+				GenericWebHook: &buildapi.WebHookTrigger{
+					Secret: "secret101",
+				},
+			},
+			expected: []*field.Error{field.Required(field.NewPath("bitbucket"), "")},
+		},
+		"Bitbucket trigger with allow env": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.BitbucketWebHookBuildTriggerType,
+				BitbucketWebHook: &buildapi.WebHookTrigger{
+					Secret:   "secret101",
+					AllowEnv: true,
+				},
+			},
+			expected: []*field.Error{field.Invalid(field.NewPath("bitbucket", "allowEnv"), "", "")},
+		},
 		"Generic trigger with no generic webhook": {
 			trigger:  buildapi.BuildTriggerPolicy{Type: buildapi.GenericWebHookBuildTriggerType},
 			expected: []*field.Error{field.Required(field.NewPath("generic"), "")},
@@ -2486,6 +2566,22 @@ func TestValidateTrigger(t *testing.T) {
 			trigger: buildapi.BuildTriggerPolicy{
 				Type: buildapi.GitHubWebHookBuildTriggerType,
 				GitHubWebHook: &buildapi.WebHookTrigger{
+					Secret: "secret101",
+				},
+			},
+		},
+		"valid GitLab trigger": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.GitLabWebHookBuildTriggerType,
+				GitLabWebHook: &buildapi.WebHookTrigger{
+					Secret: "secret101",
+				},
+			},
+		},
+		"valid Bitbucket trigger": {
+			trigger: buildapi.BuildTriggerPolicy{
+				Type: buildapi.BitbucketWebHookBuildTriggerType,
+				BitbucketWebHook: &buildapi.WebHookTrigger{
 					Secret: "secret101",
 				},
 			},

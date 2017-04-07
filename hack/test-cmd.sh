@@ -25,28 +25,11 @@ function cleanup()
     ${sudo} rm -rf "${ETCD_DATA_DIR}"
 
     if go tool -n pprof >/dev/null 2>&1; then
-        os::log::info "\`pprof\` output logged to ${LOG_DIR}/pprof.out"
+        os::log::debug "\`pprof\` output logged to ${LOG_DIR}/pprof.out"
         go tool pprof -text "./_output/local/bin/$(os::util::host_platform)/openshift" cpu.pprof >"${LOG_DIR}/pprof.out" 2>&1
     fi
 
-    # TODO(skuznets): un-hack this nonsense once traps are in a better state
-    if [[ -n "${JUNIT_REPORT_OUTPUT:-}" ]]; then
-      # get the jUnit output file into a workable state in case we crashed in the middle of testing something
-      os::test::junit::reconcile_output
-
-      # check that we didn't mangle jUnit output
-      os::test::junit::check_test_counters
-
-      # use the junitreport tool to generate us a report
-      os::util::ensure::built_binary_exists 'junitreport'
-
-      cat "${JUNIT_REPORT_OUTPUT}"                        \
-        | junitreport --type oscmd                        \
-                      --suites nested                     \
-                      --roots github.com/openshift/origin \
-                      --output "${ARTIFACT_DIR}/report.xml"
-      cat "${ARTIFACT_DIR}/report.xml" | junitreport summarize
-    fi
+    os::test::junit::generate_oscmd_report
 
     ENDTIME=$(date +%s); echo "$0 took $(($ENDTIME - $STARTTIME)) seconds"
     os::log::info "Exiting with ${out}"
@@ -89,7 +72,9 @@ export ETCD_HOST=${ETCD_HOST:-127.0.0.1}
 export ETCD_PORT=${ETCD_PORT:-24001}
 export ETCD_PEER_PORT=${ETCD_PEER_PORT:-27001}
 
-os::util::environment::setup_all_server_vars "test-cmd/"
+os::cleanup::tmpdir
+os::util::environment::setup_all_server_vars
+export HOME="${FAKE_HOME_DIR}"
 
 # Allow setting $JUNIT_REPORT to toggle output behavior
 if [[ -n "${JUNIT_REPORT:-}" ]]; then
@@ -102,9 +87,6 @@ os::log::system::start
 
 # Prevent user environment from colliding with the test setup
 unset KUBECONFIG
-
-# test wrapper functions
-${OS_ROOT}/hack/test-util.sh > ${LOG_DIR}/wrappers_test.log 2>&1
 
 # handle profiling defaults
 profile="${OPENSHIFT_PROFILE-}"
@@ -209,27 +191,15 @@ ADMIN_KUBECONFIG="${MASTER_CONFIG_DIR}/admin.kubeconfig" KUBECONFIG="${MASTER_CO
 # Begin tests
 #
 
-# create master config as atomic-enterprise just to test it works
-atomic-enterprise start \
-  --write-config="${BASETMPDIR}/atomic.local.config" \
-  --create-certs=true \
-  --master="${API_SCHEME}://${API_HOST}:${API_PORT}" \
-  --listen="${API_SCHEME}://${API_HOST}:${API_PORT}" \
-  --hostname="${KUBELET_HOST}" \
-  --volume-dir="${VOLUME_DIR}" \
-  --etcd-dir="${ETCD_DATA_DIR}" \
-  --images="${USE_IMAGES}"
-
 # check oc version with no config file
 os::test::junit::declare_suite_start "cmd/version"
 os::cmd::expect_success_and_not_text "oc version" "Missing or incomplete configuration info"
 echo "oc version (with no config file set): ok"
 os::test::junit::declare_suite_end
 
-os::test::junit::declare_suite_start "cmd/config"
 # ensure that DisabledFeatures aren't written to config files
+os::test::junit::declare_suite_start "cmd/config"
 os::cmd::expect_success_and_text "cat ${MASTER_CONFIG_DIR}/master-config.yaml" 'disabledFeatures: null'
-os::cmd::expect_success_and_text "cat ${BASETMPDIR}/atomic.local.config/master/master-config.yaml" 'disabledFeatures: null'
 os::test::junit::declare_suite_end
 
 # from this point every command will use config from the KUBECONFIG env var
@@ -271,7 +241,7 @@ for test in "${tests[@]}"; do
   os::test::junit::declare_suite_end
 done
 
-os::log::info "Metrics information logged to ${LOG_DIR}/metrics.log"
+os::log::debug "Metrics information logged to ${LOG_DIR}/metrics.log"
 oc get --raw /metrics --config="${MASTER_CONFIG_DIR}/admin.kubeconfig"> "${LOG_DIR}/metrics.log"
 
 if [[ -n "${failed:-}" ]]; then

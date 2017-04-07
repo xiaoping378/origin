@@ -11,6 +11,7 @@ import (
 	"github.com/openshift/origin/pkg/generate/app"
 	kapi "k8s.io/kubernetes/pkg/api"
 
+	configcmd "github.com/openshift/origin/pkg/config/cmd"
 	newcmd "github.com/openshift/origin/pkg/generate/app/cmd"
 	imageapi "github.com/openshift/origin/pkg/image/api"
 	templateapi "github.com/openshift/origin/pkg/template/api"
@@ -65,6 +66,10 @@ func TestNewAppDefaultFlags(t *testing.T) {
 		"env": {
 			flagName:   "env",
 			defaultVal: "[" + strings.Join(config.Environment, ",") + "]",
+		},
+		"build-env": {
+			flagName:   "build-env",
+			defaultVal: "[" + strings.Join(config.BuildEnvironment, ",") + "]",
 		},
 		"name": {
 			flagName:   "name",
@@ -176,6 +181,18 @@ func TestNewAppRunFailure(t *testing.T) {
 			},
 			expectedErr: "--search can't be used with --env",
 		},
+		"search_with_build_env": {
+			config: &newcmd.AppConfig{
+				AsSearch: true,
+				ComponentInputs: newcmd.ComponentInputs{
+					Components: []string{"mysql"},
+				},
+				GenerationInputs: newcmd.GenerationInputs{
+					BuildEnvironment: []string{"FOO=BAR"},
+				},
+			},
+			expectedErr: "--search can't be used with --build-env",
+		},
 		"search_with_param": {
 			config: &newcmd.AppConfig{
 				AsSearch: true,
@@ -191,8 +208,10 @@ func TestNewAppRunFailure(t *testing.T) {
 	}
 
 	opts := &NewAppOptions{
-		BaseName:    "oc",
-		CommandName: NewAppRecommendedCommandName,
+		ObjectGeneratorOptions: &ObjectGeneratorOptions{
+			BaseName:    "oc",
+			CommandName: NewAppRecommendedCommandName,
+		},
 	}
 
 	for testName, test := range tests {
@@ -302,9 +321,13 @@ func TestNewAppRunQueryActions(t *testing.T) {
 	}
 
 	o := &NewAppOptions{
-		Out:         ioutil.Discard,
-		BaseName:    "oc",
-		CommandName: NewAppRecommendedCommandName,
+		ObjectGeneratorOptions: &ObjectGeneratorOptions{
+			Action: configcmd.BulkAction{
+				Out: ioutil.Discard,
+			},
+			BaseName:    "oc",
+			CommandName: NewAppRecommendedCommandName,
+		},
 	}
 
 	for _, test := range tests {

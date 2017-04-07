@@ -103,6 +103,14 @@ type BuildTriggerCause struct {
 	// imageChangeBuild stores information about an imagechange event
 	// that triggered a new build.
 	ImageChangeBuild *ImageChangeCause `json:"imageChangeBuild,omitempty" protobuf:"bytes,4,opt,name=imageChangeBuild"`
+
+	// GitLabWebHook represents data for a GitLab webhook that fired a specific
+	// build.
+	GitLabWebHook *GitLabWebHookCause `json:"gitlabWebHook,omitempty" protobuf:"bytes,5,opt,name=gitlabWebHook"`
+
+	// BitbucketWebHook represents data for a Bitbucket webhook that fired a
+	// specific build.
+	BitbucketWebHook *BitbucketWebHookCause `json:"bitbucketWebHook,omitempty" protobuf:"bytes,6,opt,name=bitbucketWebHook"`
 }
 
 // GenericWebHookCause holds information about a generic WebHook that
@@ -124,6 +132,29 @@ type GitHubWebHookCause struct {
 
 	// secret is the obfuscated webhook secret that triggered a build.
 	Secret string `json:"secret,omitempty" protobuf:"bytes,2,opt,name=secret"`
+}
+
+// CommonWebHookCause factors out the identical format of these webhook
+// causes into struct so we can share it in the specific causes;  it is too late for
+// GitHub and Generic but we can leverage this pattern with GitLab and Bitbucket.
+type CommonWebHookCause struct {
+	// Revision is the git source revision information of the trigger.
+	Revision *SourceRevision `json:"revision,omitempty" protobuf:"bytes,1,opt,name=revision"`
+
+	// Secret is the obfuscated webhook secret that triggered a build.
+	Secret string `json:"secret,omitempty" protobuf:"bytes,2,opt,name=secret"`
+}
+
+// GitLabWebHookCause has information about a GitLab webhook that triggered a
+// build.
+type GitLabWebHookCause struct {
+	CommonWebHookCause `json:",inline" protobuf:"bytes,1,opt,name=commonSpec"`
+}
+
+// BitbucketWebHookCause has information about a Bitbucket webhook that triggered a
+// build.
+type BitbucketWebHookCause struct {
+	CommonWebHookCause `json:",inline" protobuf:"bytes,1,opt,name=commonSpec"`
 }
 
 // ImageChangeCause contains information about the image that triggered a
@@ -173,6 +204,9 @@ type BuildStatus struct {
 
 	// config is an ObjectReference to the BuildConfig this Build is based on.
 	Config *kapi.ObjectReference `json:"config,omitempty" protobuf:"bytes,9,opt,name=config"`
+
+	// output describes the Docker image the build has produced.
+	Output BuildStatusOutput `json:"output,omitempty" protobuf:"bytes,10,opt,name=output"`
 }
 
 // BuildPhase represents the status of a build at a point in time.
@@ -207,6 +241,24 @@ const (
 // permanent build error condition, meant for machine parsing and tidy display
 // in the CLI.
 type StatusReason string
+
+// BuildStatusOutput contains the status of the built image.
+type BuildStatusOutput struct {
+	// to describes the status of the built image being pushed to a registry.
+	To *BuildStatusOutputTo `json:"to,omitempty" protobuf:"bytes,1,opt,name=to"`
+}
+
+// BuildStatusOutputTo describes the status of the built image with regards to
+// image registry to which it was supposed to be pushed.
+type BuildStatusOutputTo struct {
+	// imageDigest is the digest of the built Docker image. The digest uniquely
+	// identifies the image in the registry to which it was pushed.
+	//
+	// Please note that this field may not always be set even if the push
+	// completes successfully - e.g. when the registry returns no digest or
+	// returns it in a format that the builder doesn't understand.
+	ImageDigest string `json:"imageDigest,omitempty" protobuf:"bytes,1,opt,name=imageDigest"`
+}
 
 // BuildSourceType is the type of SCM used.
 type BuildSourceType string
@@ -440,7 +492,8 @@ type CustomBuildStrategy struct {
 	// registries
 	PullSecret *kapi.LocalObjectReference `json:"pullSecret,omitempty" protobuf:"bytes,2,opt,name=pullSecret"`
 
-	// env contains additional environment variables you want to pass into a builder container
+	// env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,3,rep,name=env"`
 
 	// exposeDockerSocket will allow running Docker commands (and build Docker images) from
@@ -459,6 +512,27 @@ type CustomBuildStrategy struct {
 	BuildAPIVersion string `json:"buildAPIVersion,omitempty" protobuf:"bytes,7,opt,name=buildAPIVersion"`
 }
 
+// ImageOptimizationPolicy describes what optimizations the builder can perform when building images.
+type ImageOptimizationPolicy string
+
+const (
+	// ImageOptimizationNone will generate a canonical Docker image as produced by the
+	// `docker build` command.
+	ImageOptimizationNone ImageOptimizationPolicy = "None"
+
+	// ImageOptimizationSkipLayers is an experimental policy and will avoid creating
+	// unique layers for each dockerfile line, resulting in smaller images and saving time
+	// during creation. Some Dockerfile syntax is not fully supported - content added to
+	// a VOLUME by an earlier layer may have incorrect uid, gid, and filesystem permissions.
+	// If an unsupported setting is detected, the build will fail.
+	ImageOptimizationSkipLayers ImageOptimizationPolicy = "SkipLayers"
+
+	// ImageOptimizationSkipLayersAndWarn is the same as SkipLayers, but will only
+	// warn to the build output instead of failing when unsupported syntax is detected. This
+	// policy is experimental.
+	ImageOptimizationSkipLayersAndWarn ImageOptimizationPolicy = "SkipLayersAndWarn"
+)
+
 // DockerBuildStrategy defines input parameters specific to Docker build.
 type DockerBuildStrategy struct {
 	// from is reference to an DockerImage, ImageStreamTag, or ImageStreamImage from which
@@ -475,7 +549,8 @@ type DockerBuildStrategy struct {
 	// --no-cache=true flag
 	NoCache bool `json:"noCache,omitempty" protobuf:"varint,3,opt,name=noCache"`
 
-	// env contains additional environment variables you want to pass into a builder container
+	// env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,4,rep,name=env"`
 
 	// forcePull describes if the builder should pull the images from registry prior to building.
@@ -484,6 +559,19 @@ type DockerBuildStrategy struct {
 	// dockerfilePath is the path of the Dockerfile that will be used to build the Docker image,
 	// relative to the root of the context (contextDir).
 	DockerfilePath string `json:"dockerfilePath,omitempty" protobuf:"bytes,6,opt,name=dockerfilePath"`
+
+	// buildArgs contains build arguments that will be resolved in the Dockerfile.  See
+	// https://docs.docker.com/engine/reference/builder/#/arg for more details.
+	BuildArgs []kapi.EnvVar `json:"buildArgs,omitempty" protobuf:"bytes,7,rep,name=buildArgs"`
+
+	// imageOptimizationPolicy describes what optimizations the system can use when building images
+	// to reduce the final size or time spent building the image. The default policy is 'None' which
+	// means the final build image will be equivalent to an image created by the Docker build API.
+	// The experimental policy 'SkipLayers' will avoid commiting new layers in between each
+	// image step, and will fail if the Dockerfile cannot provide compatibility with the 'None'
+	// policy. An additional experimental policy 'SkipLayersAndWarn' is the same as
+	// 'SkipLayers' but simply warns if compatibility cannot be preserved.
+	ImageOptimizationPolicy *ImageOptimizationPolicy `json:"imageOptimizationPolicy,omitempty" protobuf:"bytes,8,opt,name=imageOptimizationPolicy,casttype=ImageOptimizationPolicy"`
 }
 
 // SourceBuildStrategy defines input parameters specific to an Source build.
@@ -497,7 +585,8 @@ type SourceBuildStrategy struct {
 	// registries
 	PullSecret *kapi.LocalObjectReference `json:"pullSecret,omitempty" protobuf:"bytes,2,opt,name=pullSecret"`
 
-	// env contains additional environment variables you want to pass into a builder container
+	// env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,3,rep,name=env"`
 
 	// scripts is the location of Source scripts
@@ -513,14 +602,16 @@ type SourceBuildStrategy struct {
 	// without unneeded dependencies installed. The building of the application
 	// is still done in the builder image but, post build, you can copy the
 	// needed artifacts in the runtime image for use.
-	// This field and the feature it enables are in tech preview.
+	// Deprecated: This feature will be removed in a future release. Use ImageSource
+	// to copy binary artifacts created from one build into a separate runtime image.
 	RuntimeImage *kapi.ObjectReference `json:"runtimeImage,omitempty" protobuf:"bytes,7,opt,name=runtimeImage"`
 
 	// runtimeArtifacts specifies a list of source/destination pairs that will be
 	// copied from the builder to the runtime image. sourcePath can be a file or
 	// directory. destinationDir must be a directory. destinationDir can also be
 	// empty or equal to ".", in this case it just refers to the root of WORKDIR.
-	// This field and the feature it enables are in tech preview.
+	// Deprecated: This feature will be removed in a future release. Use ImageSource
+	// to copy binary artifacts created from one build into a separate runtime image.
 	RuntimeArtifacts []ImageSourcePath `json:"runtimeArtifacts,omitempty" protobuf:"bytes,8,rep,name=runtimeArtifacts"`
 }
 
@@ -534,6 +625,10 @@ type JenkinsPipelineBuildStrategy struct {
 
 	// Jenkinsfile defines the optional raw contents of a Jenkinsfile which defines a Jenkins pipeline build.
 	Jenkinsfile string `json:"jenkinsfile,omitempty" protobuf:"bytes,2,opt,name=jenkinsfile"`
+
+	// env contains additional environment variables you want to pass into a build pipeline.
+	// ValueFrom is not supported.
+	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,3,rep,name=env"`
 }
 
 // A BuildPostCommitSpec holds a build post commit hook specification. The hook
@@ -746,6 +841,13 @@ type BuildTriggerPolicy struct {
 
 	// imageChange contains parameters for an ImageChange type of trigger
 	ImageChange *ImageChangeTrigger `json:"imageChange,omitempty" protobuf:"bytes,4,opt,name=imageChange"`
+
+	// GitLabWebHook contains the parameters for a GitLab webhook type of trigger
+	GitLabWebHook *WebHookTrigger `json:"gitlab,omitempty" protobuf:"bytes,5,opt,name=gitlab"`
+
+	// BitbucketWebHook contains the parameters for a Bitbucket webhook type of
+	// trigger
+	BitbucketWebHook *WebHookTrigger `json:"bitbucket,omitempty" protobuf:"bytes,6,opt,name=bitbucket"`
 }
 
 // BuildTriggerType refers to a specific BuildTriggerPolicy implementation.
@@ -761,6 +863,14 @@ const (
 	// generic webhook invocations
 	GenericWebHookBuildTriggerType           BuildTriggerType = "Generic"
 	GenericWebHookBuildTriggerTypeDeprecated BuildTriggerType = "generic"
+
+	// GitLabWebHookBuildTriggerType represents a trigger that launches builds on
+	// GitLab webhook invocations
+	GitLabWebHookBuildTriggerType BuildTriggerType = "GitLab"
+
+	// BitbucketWebHookBuildTriggerType represents a trigger that launches builds on
+	// Bitbucket webhook invocations
+	BitbucketWebHookBuildTriggerType BuildTriggerType = "Bitbucket"
 
 	// ImageChangeBuildTriggerType represents a trigger that launches builds on
 	// availability of a new version of an image
@@ -801,8 +911,12 @@ type GenericWebHookEvent struct {
 	// git is the git information if the Type is BuildSourceGit
 	Git *GitInfo `json:"git,omitempty" protobuf:"bytes,2,opt,name=git"`
 
-	// env contains additional environment variables you want to pass into a builder container
+	// env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,3,rep,name=env"`
+
+	// DockerStrategyOptions contains additional docker-strategy specific options for the build
+	DockerStrategyOptions *DockerStrategyOptions `json:"dockerStrategyOptions,omitempty" protobuf:"bytes,4,opt,name=dockerStrategyOptions"`
 }
 
 // GitInfo is the aggregated git information for a generic webhook post
@@ -814,6 +928,13 @@ type GitInfo struct {
 // BuildLog is the (unused) resource associated with the build log redirector
 type BuildLog struct {
 	unversioned.TypeMeta `json:",inline"`
+}
+
+// DockerStrategyOptions contains extra strategy options for Docker builds
+type DockerStrategyOptions struct {
+	// Args contains any build arguments that are to be passed to Docker.  See
+	// https://docs.docker.com/engine/reference/builder/#/arg for more details
+	BuildArgs []kapi.EnvVar `json:"buildArgs,omitempty" protobuf:"bytes,1,rep,name=buildArgs"`
 }
 
 // BuildRequest is the resource used to pass parameters to build generator
@@ -839,12 +960,16 @@ type BuildRequest struct {
 	// not be generated.
 	LastVersion *int64 `json:"lastVersion,omitempty" protobuf:"varint,6,opt,name=lastVersion"`
 
-	// env contains additional environment variables you want to pass into a builder container
+	// env contains additional environment variables you want to pass into a builder container.
+	// ValueFrom is not supported.
 	Env []kapi.EnvVar `json:"env,omitempty" protobuf:"bytes,7,rep,name=env"`
 
 	// triggeredBy describes which triggers started the most recent update to the
 	// build configuration and contains information about those triggers.
 	TriggeredBy []BuildTriggerCause `json:"triggeredBy" protobuf:"bytes,8,rep,name=triggeredBy"`
+
+	// DockerStrategyOptions contains additional docker-strategy specific options for the build
+	DockerStrategyOptions *DockerStrategyOptions `json:"dockerStrategyOptions,omitempty" protobuf:"bytes,9,opt,name=dockerStrategyOptions"`
 }
 
 // BinaryBuildRequestOptions are the options required to fully speficy a binary build request

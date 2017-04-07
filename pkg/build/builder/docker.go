@@ -13,7 +13,6 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 
 	kapi "k8s.io/kubernetes/pkg/api"
-	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 
 	s2iapi "github.com/openshift/source-to-image/pkg/api"
 	"github.com/openshift/source-to-image/pkg/tar"
@@ -23,10 +22,10 @@ import (
 	"github.com/openshift/origin/pkg/build/api"
 	"github.com/openshift/origin/pkg/build/builder/cmd/dockercfg"
 	"github.com/openshift/origin/pkg/build/controller/strategy"
+	"github.com/openshift/origin/pkg/build/util/dockerfile"
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/generate/git"
 	imageapi "github.com/openshift/origin/pkg/image/api"
-	"github.com/openshift/origin/pkg/util/docker/dockerfile"
 )
 
 // defaultDockerfilePath is the default path of the Dockerfile
@@ -69,20 +68,25 @@ func (d *DockerBuilder) Build() error {
 	}
 	sourceInfo, err := fetchSource(d.dockerClient, buildDir, d.build, initialURLCheckTimeout, os.Stdin, d.gitClient)
 	if err != nil {
-		d.build.Status.Reason = api.StatusReasonFetchSourceFailed
-		d.build.Status.Message = api.StatusMessageFetchSourceFailed
-		if updateErr := retryBuildStatusUpdate(d.build, d.client, nil); updateErr != nil {
-			utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
+		switch err.(type) {
+		case contextDirNotFoundError:
+			d.build.Status.Phase = api.BuildPhaseFailed
+			d.build.Status.Reason = api.StatusReasonInvalidContextDirectory
+			d.build.Status.Message = api.StatusMessageInvalidContextDirectory
+		default:
+			d.build.Status.Phase = api.BuildPhaseFailed
+			d.build.Status.Reason = api.StatusReasonFetchSourceFailed
+			d.build.Status.Message = api.StatusMessageFetchSourceFailed
 		}
+
+		handleBuildStatusUpdate(d.build, d.client, nil)
 		return err
 	}
 
 	if sourceInfo != nil {
 		glog.V(4).Infof("Setting build revision with details %#v", sourceInfo)
 		revision := updateBuildRevision(d.build, sourceInfo)
-		if updateErr := retryBuildStatusUpdate(d.build, d.client, revision); updateErr != nil {
-			utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
-		}
+		handleBuildStatusUpdate(d.build, d.client, revision)
 	}
 	if err = d.addBuildParameters(buildDir, sourceInfo); err != nil {
 		return err
@@ -124,32 +128,29 @@ func (d *DockerBuilder) Build() error {
 			)
 			glog.V(0).Infof("\nPulling image %s ...", imageName)
 			if err = pullImage(d.dockerClient, imageName, pullAuthConfig); err != nil {
+				d.build.Status.Phase = api.BuildPhaseFailed
 				d.build.Status.Reason = api.StatusReasonPullBuilderImageFailed
 				d.build.Status.Message = api.StatusMessagePullBuilderImageFailed
-				if updateErr := retryBuildStatusUpdate(d.build, d.client, nil); updateErr != nil {
-					utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
-				}
+				handleBuildStatusUpdate(d.build, d.client, nil)
 				return fmt.Errorf("failed to pull image: %v", err)
 			}
 		}
 	}
 
 	if err = d.dockerBuild(buildDir, buildTag, d.build.Spec.Source.Secrets); err != nil {
+		d.build.Status.Phase = api.BuildPhaseFailed
 		d.build.Status.Reason = api.StatusReasonDockerBuildFailed
 		d.build.Status.Message = api.StatusMessageDockerBuildFailed
-		if updateErr := retryBuildStatusUpdate(d.build, d.client, nil); updateErr != nil {
-			utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
-		}
+		handleBuildStatusUpdate(d.build, d.client, nil)
 		return err
 	}
 
 	cname := containerName("docker", d.build.Name, d.build.Namespace, "post-commit")
 	if err := execPostCommitHook(d.dockerClient, d.build.Spec.PostCommit, buildTag, cname); err != nil {
+		d.build.Status.Phase = api.BuildPhaseFailed
 		d.build.Status.Reason = api.StatusReasonPostCommitHookFailed
 		d.build.Status.Message = api.StatusMessagePostCommitHookFailed
-		if updateErr := retryBuildStatusUpdate(d.build, d.client, nil); updateErr != nil {
-			utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
-		}
+		handleBuildStatusUpdate(d.build, d.client, nil)
 		return err
 	}
 
@@ -173,13 +174,19 @@ func (d *DockerBuilder) Build() error {
 			glog.V(4).Infof("Authenticating Docker push with user %q", pushAuthConfig.Username)
 		}
 		glog.V(0).Infof("\nPushing image %s ...", pushTag)
-		if err := pushImage(d.dockerClient, pushTag, pushAuthConfig); err != nil {
+		digest, err := pushImage(d.dockerClient, pushTag, pushAuthConfig)
+		if err != nil {
+			d.build.Status.Phase = api.BuildPhaseFailed
 			d.build.Status.Reason = api.StatusReasonPushImageToRegistryFailed
 			d.build.Status.Message = api.StatusMessagePushImageToRegistryFailed
-			if updateErr := retryBuildStatusUpdate(d.build, d.client, nil); updateErr != nil {
-				utilruntime.HandleError(fmt.Errorf("error: An error occured while updating the build status: %v", updateErr))
-			}
+			handleBuildStatusUpdate(d.build, d.client, nil)
 			return reportPushFailure(err, authPresent, pushAuthConfig)
+		}
+		if len(digest) > 0 {
+			d.build.Status.Output.To = &api.BuildStatusOutputTo{
+				ImageDigest: digest,
+			}
+			handleBuildStatusUpdate(d.build, d.client, nil)
 		}
 		glog.V(0).Infof("Push successful")
 	}
@@ -195,15 +202,50 @@ func (d *DockerBuilder) copySecrets(secrets []api.SecretBuildSource, buildDir st
 		if err := os.MkdirAll(dstDir, 0777); err != nil {
 			return err
 		}
+		glog.V(3).Infof("Copying files from the build secret %q to %q", s.Secret.Name, dstDir)
+
+		// Secrets contain nested directories and fairly baroque links. To prevent extra data being
+		// copied, perform the following steps:
+		//
+		// 1. Only top level files and directories within the secret directory are candidates
+		// 2. Any item starting with '..' is ignored
+		// 3. Destination directories are created first with 0777
+		// 4. Use the '-L' option to cp to copy only contents.
+		//
 		srcDir := filepath.Join(strategy.SecretBuildSourceBaseMountPath, s.Secret.Name)
-		glog.V(3).Infof("Copying files from the build secret %q to %q", s.Secret.Name, filepath.Clean(s.DestinationDir))
-		out, err := exec.Command("cp", "-vrf", srcDir+"/.", dstDir+"/").Output()
-		if err != nil {
-			glog.V(4).Infof("Secret %q failed to copy: %q", s.Secret.Name, string(out))
+		if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if srcDir == path {
+				return nil
+			}
+
+			// skip any contents that begin with ".."
+			if strings.HasPrefix(filepath.Base(path), "..") {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			// ensure all directories are traversable
+			if info.IsDir() {
+				if err := os.MkdirAll(dstDir, 0777); err != nil {
+					return err
+				}
+			}
+			out, err := exec.Command("cp", "-vLRf", path, dstDir+"/").Output()
+			if err != nil {
+				glog.V(4).Infof("Secret %q failed to copy: %q", s.Secret.Name, string(out))
+				return err
+			}
+			// See what is copied when debugging.
+			glog.V(5).Infof("Result of secret copy %s\n%s", s.Secret.Name, string(out))
+			return nil
+		}); err != nil {
 			return err
 		}
-		// See what is copied where when debugging.
-		glog.V(5).Infof(string(out))
 	}
 	return nil
 }
@@ -316,6 +358,7 @@ func (d *DockerBuilder) setupPullSecret() (*docker.AuthConfigurations, error) {
 func (d *DockerBuilder) dockerBuild(dir string, tag string, secrets []api.SecretBuildSource) error {
 	var noCache bool
 	var forcePull bool
+	var buildArgs []docker.BuildArg
 	dockerfilePath := defaultDockerfilePath
 	if d.build.Spec.Strategy.DockerStrategy != nil {
 		if d.build.Spec.Source.ContextDir != "" {
@@ -323,6 +366,9 @@ func (d *DockerBuilder) dockerBuild(dir string, tag string, secrets []api.Secret
 		}
 		if d.build.Spec.Strategy.DockerStrategy.DockerfilePath != "" {
 			dockerfilePath = d.build.Spec.Strategy.DockerStrategy.DockerfilePath
+		}
+		for _, ba := range d.build.Spec.Strategy.DockerStrategy.BuildArgs {
+			buildArgs = append(buildArgs, docker.BuildArg{Name: ba.Name, Value: ba.Value})
 		}
 		noCache = d.build.Spec.Strategy.DockerStrategy.NoCache
 		forcePull = d.build.Spec.Strategy.DockerStrategy.ForcePull
@@ -342,7 +388,10 @@ func (d *DockerBuilder) dockerBuild(dir string, tag string, secrets []api.Secret
 		Dockerfile:     dockerfilePath,
 		NoCache:        noCache,
 		Pull:           forcePull,
+		BuildArgs:      buildArgs,
+		NetworkMode:    string(getDockerNetworkMode()),
 	}
+
 	if d.cgLimits != nil {
 		opts.Memory = d.cgLimits.MemoryLimitBytes
 		opts.Memswap = d.cgLimits.MemorySwap
@@ -352,6 +401,17 @@ func (d *DockerBuilder) dockerBuild(dir string, tag string, secrets []api.Secret
 	}
 	if auth != nil {
 		opts.AuthConfigs = *auth
+	}
+
+	if s := d.build.Spec.Strategy.DockerStrategy; s != nil {
+		if policy := s.ImageOptimizationPolicy; policy != nil {
+			switch *policy {
+			case api.ImageOptimizationSkipLayers:
+				return buildDirectImage(dir, false, &opts)
+			case api.ImageOptimizationSkipLayersAndWarn:
+				return buildDirectImage(dir, true, &opts)
+			}
+		}
 	}
 
 	return buildImage(d.dockerClient, dir, d.tar, &opts)
@@ -381,7 +441,7 @@ func parseDockerfile(dockerfilePath string) (*parser.Node, error) {
 	}
 
 	// Parse the Dockerfile.
-	node, err := parser.Parse(f)
+	node, err := dockerfile.Parse(f)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +461,7 @@ func replaceLastFrom(node *parser.Node, image string) error {
 			if err != nil {
 				return err
 			}
-			fromTree, err := parser.Parse(strings.NewReader(from))
+			fromTree, err := dockerfile.Parse(strings.NewReader(from))
 			if err != nil {
 				return err
 			}

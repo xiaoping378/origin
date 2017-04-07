@@ -31,8 +31,10 @@ authConfig:
   authenticationCacheTTL: ""
   authorizationCacheSize: 0
   authorizationCacheTTL: ""
+dnsBindAddress: ""
 dnsDomain: ""
 dnsIP: ""
+dnsNameservers: null
 dockerConfig:
   execHandlerName: ""
 enableUnidling: false
@@ -110,6 +112,8 @@ auditConfig:
   maximumFileRetentionDays: 0
   maximumFileSizeMegabytes: 0
   maximumRetainedFiles: 0
+authConfig:
+  requestHeader: null
 controllerConfig:
   serviceServingCert:
     signer: null
@@ -121,6 +125,7 @@ dnsConfig:
   allowRecursiveQueries: false
   bindAddress: ""
   bindNetwork: ""
+enableTemplateServiceBroker: false
 etcdClientInfo:
   ca: ""
   certFile: ""

@@ -7,6 +7,8 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,7 +19,14 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/util/wait"
 
+	buildapi "github.com/openshift/origin/pkg/build/api"
 	exutil "github.com/openshift/origin/test/extended/util"
+)
+
+const (
+	UseLocalPluginSnapshotEnvVarName       = "USE_SNAPSHOT_JENKINS_IMAGE"
+	UseLocalClientPluginSnapshotEnvVarName = "USE_SNAPSHOT_JENKINS_CLIENT_IMAGE"
+	UseLocalSyncPluginSnapshotEnvVarName   = "USE_SNAPSHOT_JENKINS_SYNC_IMAGE"
 )
 
 // JenkinsRef represents a Jenkins instance running on an OpenShift server
@@ -27,7 +36,7 @@ type JenkinsRef struct {
 	port string
 	// The namespace in which the Jenkins server is running
 	namespace string
-	password  string
+	token     string
 }
 
 // FlowDefinition can be marshalled into XML to represent a Jenkins workflow job definition.
@@ -59,16 +68,16 @@ func NewRef(oc *exutil.CLI) *JenkinsRef {
 	port, err := oc.Run("get").Args("svc", "jenkins", "--config", exutil.KubeConfigPath()).Template("{{ $x := index .spec.ports 0}}{{$x.port}}").Output()
 	o.Expect(err).NotTo(o.HaveOccurred())
 
-	g.By("get admin password")
-	password := GetAdminPassword(oc)
-	o.Expect(password).ShouldNot(o.BeEmpty())
+	g.By("get token via whoami")
+	token, err := oc.Run("whoami").Args("-t").Output()
+	o.Expect(err).NotTo(o.HaveOccurred())
 
 	j := &JenkinsRef{
 		oc:        oc,
 		host:      serviceIP,
 		port:      port,
 		namespace: oc.Namespace(),
-		password:  password,
+		token:     token,
 	}
 	return j
 }
@@ -97,7 +106,7 @@ func (j *JenkinsRef) GetResource(resourcePathFormat string, a ...interface{}) (s
 	// http://stackoverflow.com/questions/17714494/golang-http-request-results-in-eof-errors-when-making-multiple-requests-successi
 	req.Close = true
 
-	req.SetBasicAuth("admin", j.password)
+	req.Header.Set("Authorization", "Bearer "+j.token)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 
@@ -130,7 +139,7 @@ func (j *JenkinsRef) Post(reqBody io.Reader, resourcePathFormat, contentType str
 		req.Header.Set("Content-Type", contentType)
 		req.Header.Del("Expect") // jenkins will return 417 if we have an expect hdr
 	}
-	req.SetBasicAuth("admin", j.password)
+	req.Header.Set("Authorization", "Bearer "+j.token)
 
 	client := &http.Client{}
 	ginkgolog("Posting to Jenkins resource: %q", uri)
@@ -321,20 +330,6 @@ func (j *JenkinsRef) GetLastJobConsoleLogs(jobName string) (string, error) {
 	return j.GetJobConsoleLogs(jobName, "lastBuild")
 }
 
-func GetAdminPassword(oc *exutil.CLI) string {
-	envs, err := oc.Run("set").Args("env", "dc/jenkins", "--list").Output()
-	o.Expect(err).NotTo(o.HaveOccurred())
-	kvs := strings.Split(envs, "\n")
-	for _, kv := range kvs {
-		if strings.HasPrefix(kv, "JENKINS_PASSWORD=") {
-			s := strings.Split(kv, "=")
-			fmt.Fprintf(g.GinkgoWriter, "\nJenkins admin password %s\n", s[1])
-			return s[1]
-		}
-	}
-	return "password"
-}
-
 // Finds the pod running Jenkins
 func FindJenkinsPod(oc *exutil.CLI) *kapi.Pod {
 	pods, err := exutil.GetDeploymentConfigPods(oc, "jenkins")
@@ -346,4 +341,100 @@ func FindJenkinsPod(oc *exutil.CLI) *kapi.Pod {
 
 	o.ExpectWithOffset(1, len(pods.Items)).To(o.Equal(1))
 	return &pods.Items[0]
+}
+
+// pulls in a jenkins image built from a PR change for one of our plugins
+func SetupSnapshotImage(envVarName, localImageName, snapshotImageStream string, newAppArgs []string, oc *exutil.CLI) ([]string, bool) {
+	tag := []string{localImageName}
+	hexIDs, err := exutil.DumpAndReturnTagging(tag)
+
+	// If the user has expressed an interest in local plugin testing by setting the
+	// SNAPSHOT_JENKINS_IMAGE environment variable, try to use the local image. Inform them
+	// either about which image is being used in case their test fails.
+	snapshotImagePresent := len(hexIDs) > 0 && err == nil
+	useSnapshotImage := os.Getenv(envVarName) != ""
+
+	if useSnapshotImage {
+		g.By("Creating a snapshot Jenkins imagestream and overridding the default Jenkins imagestream")
+		o.Expect(snapshotImagePresent).To(o.BeTrue())
+
+		ginkgolog("")
+		ginkgolog("")
+		ginkgolog("IMPORTANT: You are testing a local jenkins snapshot image.")
+		ginkgolog("In order to target the official image stream, you must unset %s before running extended tests.", envVarName)
+		ginkgolog("")
+		ginkgolog("")
+
+		// Create an imagestream based on the Jenkins' plugin PR-Testing image (https://github.com/openshift/jenkins-plugin/blob/master/PR-Testing/README).
+		err = oc.Run("new-build").Args("-D", fmt.Sprintf("FROM %s", localImageName), "--to", snapshotImageStream).Execute()
+		o.Expect(err).NotTo(o.HaveOccurred())
+
+		g.By("waiting for build to finish")
+		err = exutil.WaitForABuild(oc.Client().Builds(oc.Namespace()), snapshotImageStream+"-1", exutil.CheckBuildSuccessFn, exutil.CheckBuildFailedFn, exutil.CheckBuildCancelledFn)
+		if err != nil {
+			exutil.DumpBuildLogs(snapshotImageStream, oc)
+		}
+		o.Expect(err).NotTo(o.HaveOccurred())
+
+		// Supplant the normal imagestream with the local imagestream using template parameters
+		newAppArgs = append(newAppArgs, "-p", fmt.Sprintf("NAMESPACE=%s", oc.Namespace()))
+		newAppArgs = append(newAppArgs, "-p", fmt.Sprintf("JENKINS_IMAGE_STREAM_TAG=%s:latest", snapshotImageStream))
+
+	} else {
+		if snapshotImagePresent {
+			ginkgolog("")
+			ginkgolog("")
+			ginkgolog("IMPORTANT: You have a local OpenShift jenkins snapshot image, but it is not being used for testing.")
+			ginkgolog("In order to target your local image, you must set %s to some value before running extended tests.", envVarName)
+			ginkgolog("")
+			ginkgolog("")
+		}
+	}
+
+	return newAppArgs, useSnapshotImage
+}
+
+func ProcessLogURLAnnotations(oc *exutil.CLI, t *exutil.BuildResult) (*url.URL, error) {
+	if len(t.Build.Annotations[buildapi.BuildJenkinsLogURLAnnotation]) == 0 {
+		return nil, fmt.Errorf("build %s does not contain a Jenkins URL annotation", t.BuildName)
+	}
+	jenkinsLogURL, err := url.Parse(t.Build.Annotations[buildapi.BuildJenkinsLogURLAnnotation])
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse jenkins log URL (%s): %v", t.Build.Annotations[buildapi.BuildJenkinsLogURLAnnotation], err)
+	}
+	if len(t.Build.Annotations[buildapi.BuildJenkinsConsoleLogURLAnnotation]) == 0 {
+		return nil, fmt.Errorf("build %s does not contain a Jenkins Console URL annotation", t.BuildName)
+	}
+	_, err = url.Parse(t.Build.Annotations[buildapi.BuildJenkinsConsoleLogURLAnnotation])
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse jenkins console log URL (%s): %v", t.Build.Annotations[buildapi.BuildJenkinsConsoleLogURLAnnotation], err)
+	}
+	if len(t.Build.Annotations[buildapi.BuildJenkinsBlueOceanLogURLAnnotation]) == 0 {
+		return nil, fmt.Errorf("build %s does not contain a Jenkins BlueOcean URL annotation", t.BuildName)
+	}
+	_, err = url.Parse(t.Build.Annotations[buildapi.BuildJenkinsBlueOceanLogURLAnnotation])
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse jenkins log blueocean URL (%s): %v", t.Build.Annotations[buildapi.BuildJenkinsBlueOceanLogURLAnnotation], err)
+	}
+	return jenkinsLogURL, nil
+}
+
+func DumpLogs(oc *exutil.CLI, t *exutil.BuildResult) (string, error) {
+	var err error
+	if t.Build == nil {
+		t.Build, err = oc.Client().Builds(oc.Namespace()).Get(t.BuildName)
+		if err != nil {
+			return "", fmt.Errorf("cannot retrieve build %s: %v", t.BuildName, err)
+		}
+	}
+	jenkinsLogURL, err := ProcessLogURLAnnotations(oc, t)
+	if err != nil {
+		return "", err
+	}
+	jenkinsRef := NewRef(oc)
+	log, _, err := jenkinsRef.GetResource(jenkinsLogURL.Path)
+	if err != nil {
+		return "", fmt.Errorf("cannot get jenkins log: %v", err)
+	}
+	return log, nil
 }

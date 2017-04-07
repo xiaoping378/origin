@@ -117,7 +117,7 @@ To search templates, image streams, and Docker images that match the arguments p
 `
 )
 
-type NewAppOptions struct {
+type ObjectGeneratorOptions struct {
 	Action configcmd.BulkAction
 	Config *newcmd.AppConfig
 
@@ -126,17 +126,64 @@ type NewAppOptions struct {
 	CommandName string
 
 	In            io.Reader
-	Out, ErrOut   io.Writer
-	Output        string
+	ErrOut        io.Writer
 	PrintObject   func(obj runtime.Object) error
 	LogsForObject LogsForObjectFunc
+}
+
+type NewAppOptions struct {
+	*ObjectGeneratorOptions
+}
+
+//Complete sets all common default options for commands (new-app and new-build)
+func (o *ObjectGeneratorOptions) Complete(baseName, commandName string, f *clientcmd.Factory, c *cobra.Command, args []string, in io.Reader, out, errout io.Writer) error {
+	cmdutil.WarnAboutCommaSeparation(errout, o.Config.Environment, "--env")
+	cmdutil.WarnAboutCommaSeparation(errout, o.Config.BuildEnvironment, "--build-env")
+
+	o.In = in
+	o.ErrOut = errout
+	// Only output="" should print descriptions of intermediate steps. Everything
+	// else should print only some specific output (json, yaml, go-template, ...)
+	o.Config.In = o.In
+	if len(o.Action.Output) == 0 {
+		o.Config.Out = out
+	} else {
+		o.Config.Out = ioutil.Discard
+	}
+	o.Config.ErrOut = o.ErrOut
+
+	o.Action.Out, o.Action.ErrOut = out, o.ErrOut
+	o.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
+	o.Action.Bulk.Op = configcmd.Create
+	// Retry is used to support previous versions of the API server that will
+	// consider the presence of an unknown trigger type to be an error.
+	o.Action.Bulk.Retry = retryBuildConfig
+
+	o.Config.DryRun = o.Action.DryRun
+	if o.Action.Output == "wide" {
+		return kcmdutil.UsageError(c, "wide mode is not a compatible output format")
+	}
+	o.CommandPath = c.CommandPath()
+	o.BaseName = baseName
+	o.CommandName = commandName
+
+	mapper, _ := f.Object()
+	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, c, mapper, out)
+	o.LogsForObject = f.LogsForObject
+	if err := CompleteAppConfig(o.Config, f, c, args); err != nil {
+		return err
+	}
+	if err := setAppConfigLabels(c, o.Config); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NewCmdNewApplication implements the OpenShift cli new-app command.
 func NewCmdNewApplication(name, baseName string, f *clientcmd.Factory, in io.Reader, out, errout io.Writer) *cobra.Command {
 	config := newcmd.NewAppConfig()
 	config.Deploy = true
-	o := &NewAppOptions{Config: config}
+	o := &NewAppOptions{&ObjectGeneratorOptions{Config: config}}
 
 	cmd := &cobra.Command{
 		Use:        fmt.Sprintf("%s (IMAGE | IMAGESTREAM | TEMPLATE | PATH | URL ...)", name),
@@ -171,6 +218,9 @@ func NewCmdNewApplication(name, baseName string, f *clientcmd.Factory, in io.Rea
 	cmd.Flags().StringArrayVarP(&config.Environment, "env", "e", config.Environment, "Specify a key-value pair for an environment variable to set into each container.")
 	cmd.Flags().StringArrayVar(&config.EnvironmentFiles, "env-file", config.EnvironmentFiles, "File containing key-value pairs of environment variables to set into each container.")
 	cmd.MarkFlagFilename("env-file")
+	cmd.Flags().StringArrayVar(&config.BuildEnvironment, "build-env", config.BuildEnvironment, "Specify a key-value pair for an environment variable to set into each build image.")
+	cmd.Flags().StringArrayVar(&config.BuildEnvironmentFiles, "build-env-file", config.BuildEnvironmentFiles, "File containing key-value pairs of environment variables to set into each build image.")
+	cmd.MarkFlagFilename("build-env-file")
 	cmd.Flags().StringVar(&config.Name, "name", "", "Set name to use for generated application artifacts")
 	cmd.Flags().Var(&config.Strategy, "strategy", "Specify the build strategy to use if you don't want to detect (docker|pipeline|source).")
 	cmd.Flags().StringP("labels", "l", "", "Label to set in all resources for this application.")
@@ -190,56 +240,25 @@ func NewCmdNewApplication(name, baseName string, f *clientcmd.Factory, in io.Rea
 
 // Complete sets any default behavior for the command
 func (o *NewAppOptions) Complete(baseName, commandName string, f *clientcmd.Factory, c *cobra.Command, args []string, in io.Reader, out, errout io.Writer) error {
-	o.In = in
-	o.Out = out
-	o.ErrOut = errout
-	o.Output = kcmdutil.GetFlagString(c, "output")
-	// Only output="" should print descriptions of intermediate steps. Everything
-	// else should print only some specific output (json, yaml, go-template, ...)
-	o.Config.In = o.In
-	if len(o.Output) == 0 {
-		o.Config.Out = o.Out
-	} else {
-		o.Config.Out = ioutil.Discard
-	}
-	o.Config.ErrOut = o.ErrOut
-
-	o.Action.Out, o.Action.ErrOut = o.Out, o.ErrOut
-	o.Action.Bulk.Mapper = clientcmd.ResourceMapper(f)
-	o.Action.Bulk.Op = configcmd.Create
-	// Retry is used to support previous versions of the API server that will
-	// consider the presence of an unknown trigger type to be an error.
-	o.Action.Bulk.Retry = retryBuildConfig
-
-	o.Config.DryRun = o.Action.DryRun
-
-	cmdutil.WarnAboutCommaSeparation(o.ErrOut, o.Config.Environment, "--env")
-	cmdutil.WarnAboutCommaSeparation(o.ErrOut, o.Config.TemplateParameters, "--param")
-
-	o.CommandPath = c.CommandPath()
-	o.BaseName = baseName
-	o.CommandName = commandName
-	mapper, _ := f.Object()
-	o.PrintObject = cmdutil.VersionedPrintObject(f.PrintObject, c, mapper, out)
-	o.LogsForObject = f.LogsForObject
-	if err := CompleteAppConfig(o.Config, f, c, args); err != nil {
+	ao := o.ObjectGeneratorOptions
+	cmdutil.WarnAboutCommaSeparation(errout, ao.Config.TemplateParameters, "--param")
+	err := ao.Complete(baseName, commandName, f, c, args, in, out, errout)
+	if err != nil {
 		return err
 	}
-	if err := setAppConfigLabels(c, o.Config); err != nil {
-		return err
-	}
+
 	return nil
 }
 
 // RunNewApp contains all the necessary functionality for the OpenShift cli new-app command
 func (o *NewAppOptions) RunNewApp() error {
 	config := o.Config
-	out := o.Out
+	out := o.Action.Out
 
 	if config.Querying() {
 		result, err := config.RunQuery()
 		if err != nil {
-			return handleRunError(err, o.BaseName, o.CommandName, o.CommandPath)
+			return handleError(err, o.BaseName, o.CommandName, o.CommandPath, config, transformRunError)
 		}
 
 		if o.Action.ShouldPrint() {
@@ -252,7 +271,7 @@ func (o *NewAppOptions) RunNewApp() error {
 	checkGitInstalled(out)
 
 	result, err := config.Run()
-	if err := handleRunError(err, o.BaseName, o.CommandName, o.CommandPath); err != nil {
+	if err := handleError(err, o.BaseName, o.CommandName, o.CommandPath, config, transformRunError); err != nil {
 		return err
 	}
 
@@ -275,7 +294,6 @@ func (o *NewAppOptions) RunNewApp() error {
 			}
 		}
 	}
-
 	if err := setAnnotations(map[string]string{newcmd.GeneratedByNamespace: newcmd.GeneratedByNewApp}, result); err != nil {
 		return err
 	}
@@ -514,6 +532,9 @@ func CompleteAppConfig(config *newcmd.AppConfig, f *clientcmd.Factory, c *cobra.
 		return kcmdutil.UsageError(c, "specifying binary builds and the pipeline strategy at the same time is not allowed.")
 	}
 
+	if len(config.BuildArgs) > 0 && config.Strategy != generate.StrategyUnspecified && config.Strategy != generate.StrategyDocker {
+		return kcmdutil.UsageError(c, "Cannot use '--build-arg' without a Docker build")
+	}
 	return nil
 }
 
@@ -521,7 +542,7 @@ func setAnnotations(annotations map[string]string, result *newcmd.AppResult) err
 	for _, object := range result.List.Items {
 		err := util.AddObjectAnnotations(object, annotations)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add annotation to object of type %q, this resource type is probably unsupported by your client version.", object.GetObjectKind().GroupVersionKind())
 		}
 	}
 	return nil
@@ -531,7 +552,7 @@ func setLabels(labels map[string]string, result *newcmd.AppResult) error {
 	for _, object := range result.List.Items {
 		err := util.AddObjectLabels(object, labels)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add annotation to object of type %q, this resource type is probably unsupported by your client version.", object.GetObjectKind().GroupVersionKind())
 		}
 	}
 	return nil
@@ -571,11 +592,13 @@ func isInvalidTriggerError(err error) bool {
 // type that is not in the whitelist for an older server.
 func retryBuildConfig(info *resource.Info, err error) runtime.Object {
 	triggerTypeWhiteList := map[buildapi.BuildTriggerType]struct{}{
-		buildapi.GitHubWebHookBuildTriggerType:  {},
-		buildapi.GenericWebHookBuildTriggerType: {},
-		buildapi.ImageChangeBuildTriggerType:    {},
+		buildapi.GitHubWebHookBuildTriggerType:    {},
+		buildapi.GenericWebHookBuildTriggerType:   {},
+		buildapi.ImageChangeBuildTriggerType:      {},
+		buildapi.GitLabWebHookBuildTriggerType:    {},
+		buildapi.BitbucketWebHookBuildTriggerType: {},
 	}
-	if info.Mapping.GroupVersionKind.GroupKind() == buildapi.Kind("BuildConfig") && isInvalidTriggerError(err) {
+	if buildapi.IsKindOrLegacy("BuildConfig", info.Mapping.GroupVersionKind.GroupKind()) && isInvalidTriggerError(err) {
 		bc, ok := info.Object.(*buildapi.BuildConfig)
 		if !ok {
 			return nil
@@ -592,7 +615,7 @@ func retryBuildConfig(info *resource.Info, err error) runtime.Object {
 	return nil
 }
 
-func handleRunError(err error, baseName, commandName, commandPath string) error {
+func handleError(err error, baseName, commandName, commandPath string, config *newcmd.AppConfig, transformError func(err error, baseName, commandName, commandPath string, groups errorGroups)) error {
 	if err == nil {
 		return nil
 	}
@@ -605,6 +628,17 @@ func handleRunError(err error, baseName, commandName, commandPath string) error 
 		transformError(err, baseName, commandName, commandPath, groups)
 	}
 	buf := &bytes.Buffer{}
+	if len(config.ArgumentClassificationErrors) > 0 {
+		fmt.Fprintf(buf, "Errors occurred while determining argument types:\n")
+		for _, classErr := range config.ArgumentClassificationErrors {
+			fmt.Fprintf(buf, fmt.Sprintf("\n%s:  %v\n", classErr.Key, classErr.Value))
+		}
+		fmt.Fprint(buf, "\n")
+		// this print serves as a header for the printing of the errorGroups, but
+		// only print it if we precede with classification errors, to help distinguish
+		// between the two
+		fmt.Fprintln(buf, "Errors occurred during resource creation:")
+	}
 	for _, group := range groups {
 		fmt.Fprint(buf, kcmdutil.MultipleErrors("error: ", group.errs))
 		if len(group.suggestion) > 0 {
@@ -629,7 +663,7 @@ func (g errorGroups) Add(group string, suggestion string, err error, errs ...err
 	g[group] = all
 }
 
-func transformError(err error, baseName, commandName, commandPath string, groups errorGroups) {
+func transformRunError(err error, baseName, commandName, commandPath string, groups errorGroups) {
 	switch t := err.(type) {
 	case newcmd.ErrRequiresExplicitAccess:
 		if t.Input.Token != nil && t.Input.Token.ServiceAccount {

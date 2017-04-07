@@ -370,6 +370,38 @@ func TestInstantiateWithImageTrigger(t *testing.T) {
 				bc = buildConfig
 				return nil
 			}
+		client.GetImageStreamFunc =
+			func(ctx kapi.Context, name string) (*imageapi.ImageStream, error) {
+				return &imageapi.ImageStream{
+					ObjectMeta: kapi.ObjectMeta{Name: name},
+					Status: imageapi.ImageStreamStatus{
+						DockerImageRepository: originalImage,
+						Tags: map[string]imageapi.TagEventList{
+							"tag1": {
+								Items: []imageapi.TagEvent{
+									{
+										DockerImageReference: "ref/" + name + ":tag1",
+									},
+								},
+							},
+							"tag2": {
+								Items: []imageapi.TagEvent{
+									{
+										DockerImageReference: "ref/" + name + ":tag2",
+									},
+								},
+							},
+							"tag3": {
+								Items: []imageapi.TagEvent{
+									{
+										DockerImageReference: "ref/" + name + ":tag3",
+									},
+								},
+							},
+						},
+					},
+				}, nil
+			}
 		generator.Client = client
 
 		req := &buildapi.BuildRequest{
@@ -395,7 +427,7 @@ func TestInstantiateWithImageTrigger(t *testing.T) {
 			if i == tc.triggerIndex {
 				// Verify that the trigger got updated
 				if bc.Spec.Triggers[i].ImageChange.LastTriggeredImageID != imageID {
-					t.Errorf("%s: expeccted trigger at index %d to contain imageID %s", tc.name, i, imageID)
+					t.Errorf("%s: expected trigger at index %d to contain imageID %s", tc.name, i, imageID)
 				}
 				continue
 			}
@@ -405,8 +437,126 @@ func TestInstantiateWithImageTrigger(t *testing.T) {
 				if from == nil {
 					from = buildutil.GetInputReference(bc.Spec.Strategy)
 				}
-				if bc.Spec.Triggers[i].ImageChange.LastTriggeredImageID != ("ref@" + from.Name) {
-					t.Errorf("%s: expected LastTriggeredImageID for trigger at %d to be %s. Got: %s", tc.name, i, "ref@"+from.Name, bc.Spec.Triggers[i].ImageChange.LastTriggeredImageID)
+				if bc.Spec.Triggers[i].ImageChange.LastTriggeredImageID != ("ref/" + from.Name) {
+					t.Errorf("%s: expected LastTriggeredImageID for trigger at %d (%+v) to be %s. Got: %s", tc.name, i, bc.Spec.Triggers[i].ImageChange.From, "ref/"+from.Name, bc.Spec.Triggers[i].ImageChange.LastTriggeredImageID)
+				}
+			}
+		}
+	}
+}
+
+func TestInstantiateWithBuildRequestEnvs(t *testing.T) {
+	buildRequestWithEnv := buildapi.BuildRequest{
+		Env: []kapi.EnvVar{{Name: "FOO", Value: "BAR"}},
+	}
+	buildRequestWithoutEnv := buildapi.BuildRequest{}
+
+	tests := []struct {
+		bcfunc           func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error)
+		req              buildapi.BuildRequest
+		expectedEnvValue string
+	}{
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockSourceStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithEnv,
+			expectedEnvValue: "BAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockDockerStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithEnv,
+			expectedEnvValue: "BAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockCustomStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithEnv,
+			expectedEnvValue: "BAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockJenkinsStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithEnv,
+			expectedEnvValue: "BAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockSourceStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithoutEnv,
+			expectedEnvValue: "VAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockDockerStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithoutEnv,
+			expectedEnvValue: "VAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockCustomStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithoutEnv,
+			expectedEnvValue: "VAR",
+		},
+		{
+			bcfunc: func(ctx kapi.Context, name string) (*buildapi.BuildConfig, error) {
+				return mocks.MockBuildConfig(mocks.MockSource(), mocks.MockJenkinsStrategyForEnvs(), mocks.MockOutput()), nil
+			},
+			req:              buildRequestWithoutEnv,
+			expectedEnvValue: "VAR",
+		},
+	}
+
+	for _, tc := range tests {
+		generator := mockBuildGenerator()
+		client := generator.Client.(Client)
+		client.GetBuildConfigFunc = tc.bcfunc
+		generator.Client = client
+		build, err := generator.Instantiate(kapi.NewDefaultContext(), &tc.req)
+		if err != nil {
+			t.Errorf("unexpected error %v", err)
+		} else {
+			switch {
+			case build.Spec.Strategy.SourceStrategy != nil:
+				if len(build.Spec.Strategy.SourceStrategy.Env) == 0 {
+					t.Errorf("no envs set for src bc and req %#v, expected %s", tc.req, tc.expectedEnvValue)
+				} else if build.Spec.Strategy.SourceStrategy.Env[0].Value != tc.expectedEnvValue {
+					t.Errorf("unexpected value %s for src bc and req %#v, expected %s", build.Spec.Strategy.SourceStrategy.Env[0].Value, tc.req, tc.expectedEnvValue)
+				}
+			case build.Spec.Strategy.DockerStrategy != nil:
+				if len(build.Spec.Strategy.DockerStrategy.Env) == 0 {
+					t.Errorf("no envs set for dock bc and req %#v, expected %s", tc.req, tc.expectedEnvValue)
+				} else if build.Spec.Strategy.DockerStrategy.Env[0].Value != tc.expectedEnvValue {
+					t.Errorf("unexpected value %s for dock bc and req %#v, expected %s", build.Spec.Strategy.DockerStrategy.Env[0].Value, tc.req, tc.expectedEnvValue)
+				}
+			case build.Spec.Strategy.CustomStrategy != nil:
+				if len(build.Spec.Strategy.CustomStrategy.Env) == 0 {
+					t.Errorf("no envs set for cust bc and req %#v, expected %s", tc.req, tc.expectedEnvValue)
+				} else {
+					// custom strategy will also have OPENSHIFT_CUSTOM_BUILD_BASE_IMAGE injected, could be in either order
+					found := false
+					for _, env := range build.Spec.Strategy.CustomStrategy.Env {
+						if env.Value == tc.expectedEnvValue {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("unexpected values %#v for cust bc and req %#v, expected %s", build.Spec.Strategy.CustomStrategy.Env, tc.req, tc.expectedEnvValue)
+					}
+				}
+			case build.Spec.Strategy.JenkinsPipelineStrategy != nil:
+				if len(build.Spec.Strategy.JenkinsPipelineStrategy.Env) == 0 {
+					t.Errorf("no envs set for jenk bc and req %#v, expected %s", tc.req, tc.expectedEnvValue)
+				} else if build.Spec.Strategy.JenkinsPipelineStrategy.Env[0].Value != tc.expectedEnvValue {
+					t.Errorf("unexpected value %s for jenk bc and req %#v, expected %s", build.Spec.Strategy.JenkinsPipelineStrategy.Env[0].Value, tc.req, tc.expectedEnvValue)
 				}
 			}
 		}
@@ -447,8 +597,8 @@ func TestInstantiateWithLastVersion(t *testing.T) {
 func TestInstantiateWithMissingImageStream(t *testing.T) {
 	g := mockBuildGenerator()
 	c := g.Client.(Client)
-	c.GetImageStreamTagFunc = func(ctx kapi.Context, name string) (*imageapi.ImageStreamTag, error) {
-		return nil, errors.NewNotFound(imageapi.Resource("imagestreamtags"), "testRepo")
+	c.GetImageStreamFunc = func(ctx kapi.Context, name string) (*imageapi.ImageStream, error) {
+		return nil, errors.NewNotFound(imageapi.Resource("imagestreams"), "testRepo")
 	}
 	g.Client = c
 
@@ -456,7 +606,7 @@ func TestInstantiateWithMissingImageStream(t *testing.T) {
 	se, ok := err.(*errors.StatusError)
 
 	if !ok {
-		t.Errorf("Expected errors.StatusError, got %T", err)
+		t.Fatalf("Expected errors.StatusError, got %T", err)
 	}
 
 	if se.ErrStatus.Code != errors.StatusUnprocessableEntity {
@@ -740,6 +890,7 @@ func TestGenerateBuildFromConfig(t *testing.T) {
 	resources := mockResources()
 	bc := &buildapi.BuildConfig{
 		ObjectMeta: kapi.ObjectMeta{
+			UID:       "test-uid",
 			Name:      "test-build-config",
 			Namespace: kapi.NamespaceDefault,
 			Labels:    map[string]string{"testlabel": "testvalue"},
@@ -808,6 +959,9 @@ func TestGenerateBuildFromConfig(t *testing.T) {
 	}
 	if build.Annotations[buildapi.BuildNumberAnnotation] != "13" {
 		t.Errorf("Build number annotation value %s does not match expected value 13", build.Annotations[buildapi.BuildNumberAnnotation])
+	}
+	if len(build.OwnerReferences) == 0 || build.OwnerReferences[0].Kind != "BuildConfig" || build.OwnerReferences[0].Name != bc.Name {
+		t.Errorf("generated build does not have OwnerReference to parent BuildConfig")
 	}
 
 	// Test long name
@@ -1066,10 +1220,20 @@ func TestGenerateBuildFromBuild(t *testing.T) {
 		ObjectMeta: kapi.ObjectMeta{
 			Name: "test-build",
 			Annotations: map[string]string{
-				buildapi.BuildJenkinsStatusJSONAnnotation: "foo",
-				buildapi.BuildJenkinsLogURLAnnotation:     "bar",
-				buildapi.BuildJenkinsBuildURIAnnotation:   "baz",
-				buildapi.BuildPodNameAnnotation:           "ruby-sample-build-1-build",
+				buildapi.BuildJenkinsStatusJSONAnnotation:      "foo",
+				buildapi.BuildJenkinsLogURLAnnotation:          "bar",
+				buildapi.BuildJenkinsConsoleLogURLAnnotation:   "bar",
+				buildapi.BuildJenkinsBlueOceanLogURLAnnotation: "bar",
+				buildapi.BuildJenkinsBuildURIAnnotation:        "baz",
+				buildapi.BuildPodNameAnnotation:                "ruby-sample-build-1-build",
+			},
+			OwnerReferences: []kapi.OwnerReference{
+				{
+					Name:       "test-owner",
+					Kind:       "BuildConfig",
+					APIVersion: "v1",
+					UID:        "foo",
+				},
 			},
 		},
 		Spec: buildapi.BuildSpec{
@@ -1099,12 +1263,22 @@ func TestGenerateBuildFromBuild(t *testing.T) {
 	if _, ok := newBuild.ObjectMeta.Annotations[buildapi.BuildJenkinsLogURLAnnotation]; ok {
 		t.Errorf("%s annotation exists, expected it not to", buildapi.BuildJenkinsLogURLAnnotation)
 	}
+	if _, ok := newBuild.ObjectMeta.Annotations[buildapi.BuildJenkinsConsoleLogURLAnnotation]; ok {
+		t.Errorf("%s annotation exists, expected it not to", buildapi.BuildJenkinsConsoleLogURLAnnotation)
+	}
+	if _, ok := newBuild.ObjectMeta.Annotations[buildapi.BuildJenkinsBlueOceanLogURLAnnotation]; ok {
+		t.Errorf("%s annotation exists, expected it not to", buildapi.BuildJenkinsBlueOceanLogURLAnnotation)
+	}
 	if _, ok := newBuild.ObjectMeta.Annotations[buildapi.BuildJenkinsBuildURIAnnotation]; ok {
 		t.Errorf("%s annotation exists, expected it not to", buildapi.BuildJenkinsBuildURIAnnotation)
 	}
 	if _, ok := newBuild.ObjectMeta.Annotations[buildapi.BuildPodNameAnnotation]; ok {
 		t.Errorf("%s annotation exists, expected it not to", buildapi.BuildPodNameAnnotation)
 	}
+	if !reflect.DeepEqual(build.ObjectMeta.OwnerReferences, newBuild.ObjectMeta.OwnerReferences) {
+		t.Errorf("Build OwnerReferences does not match the original Build OwnerReferences")
+	}
+
 }
 
 func TestGenerateBuildFromBuildWithBuildConfig(t *testing.T) {
@@ -1421,7 +1595,7 @@ func TestResolveImageStreamRef(t *testing.T) {
 				Name: imageRepoName + ":" + tagName,
 			},
 			expectedSuccess:   true,
-			expectedDockerRef: latestDockerReference,
+			expectedDockerRef: dockerReference,
 		},
 		{
 			streamRef: kapi.ObjectReference{
@@ -1445,7 +1619,7 @@ func TestResolveImageStreamRef(t *testing.T) {
 			t.Errorf("Scenario %d: did not get expected error", i)
 		}
 		if ref != test.expectedDockerRef {
-			t.Errorf("Scenario %d: Resolved reference %s did not match expected value %s", i, ref, test.expectedDockerRef)
+			t.Errorf("Scenario %d: Resolved reference %q did not match expected value %q", i, ref, test.expectedDockerRef)
 		}
 	}
 }
@@ -1554,7 +1728,6 @@ func mockBuildGeneratorForInstantiate() *BuildGenerator {
 			},
 		}, nil
 	}
-	g.Client = c
 	return g
 }
 
@@ -1603,7 +1776,7 @@ func mockBuildGenerator() *BuildGenerator {
 							},
 							imageapi.DefaultImageTag: {
 								Items: []imageapi.TagEvent{
-									{DockerImageReference: latestDockerReference},
+									{DockerImageReference: latestDockerReference, Image: "myid"},
 								},
 							},
 						},
@@ -1803,7 +1976,7 @@ func TestInstantiateBuildTriggerCauseGitHubWebHook(t *testing.T) {
 		TriggeredBy: append(buildTriggerCauses,
 			buildapi.BuildTriggerCause{
 				Message: changeMessage,
-				GenericWebHook: &buildapi.GenericWebHookCause{
+				GitHubWebHook: &buildapi.GitHubWebHookCause{
 					Secret:   webHookSecret,
 					Revision: gitRevision,
 				},
@@ -1820,10 +1993,104 @@ func TestInstantiateBuildTriggerCauseGitHubWebHook(t *testing.T) {
 		if cause.Message != changeMessage {
 			t.Errorf("Expected reason %s, got %s", changeMessage, cause.Message)
 		}
-		if cause.GenericWebHook.Secret != webHookSecret {
-			t.Errorf("Expected WebHook secret %s, got %s", webHookSecret, cause.GenericWebHook.Secret)
+		if cause.GitHubWebHook.Secret != webHookSecret {
+			t.Errorf("Expected WebHook secret %s, got %s", webHookSecret, cause.GitHubWebHook.Secret)
 		}
-		if !reflect.DeepEqual(gitRevision, cause.GenericWebHook.Revision) {
+		if !reflect.DeepEqual(gitRevision, cause.GitHubWebHook.Revision) {
+			t.Errorf("Expected return revision to match")
+		}
+	}
+}
+
+func TestInstantiateBuildTriggerCauseGitLabWebHook(t *testing.T) {
+	buildTriggerCauses := []buildapi.BuildTriggerCause{}
+	changeMessage := buildapi.BuildTriggerCauseGitLabMsg
+	webHookSecret := "testsecret"
+
+	gitRevision := &buildapi.SourceRevision{
+		Git: &buildapi.GitSourceRevision{
+			Author: buildapi.SourceControlUser{
+				Name:  "John Doe",
+				Email: "johndoe@test.com",
+			},
+			Message: "A random act of kindness",
+		},
+	}
+
+	buildRequest := &buildapi.BuildRequest{
+		TriggeredBy: append(buildTriggerCauses,
+			buildapi.BuildTriggerCause{
+				Message: changeMessage,
+				GitLabWebHook: &buildapi.GitLabWebHookCause{
+					CommonWebHookCause: buildapi.CommonWebHookCause{
+						Revision: gitRevision,
+						Secret:   webHookSecret,
+					},
+				},
+			},
+		),
+	}
+
+	generator := mockBuildGenerator()
+	buildObject, err := generator.Instantiate(kapi.NewDefaultContext(), buildRequest)
+	if err != nil {
+		t.Errorf("Expected error to be nil, got %v", err)
+	}
+	for _, cause := range buildObject.Spec.TriggeredBy {
+		if cause.Message != changeMessage {
+			t.Errorf("Expected reason %s, got %s", changeMessage, cause.Message)
+		}
+		if cause.GitLabWebHook.Secret != webHookSecret {
+			t.Errorf("Expected WebHook secret %s, got %s", webHookSecret, cause.GitLabWebHook.Secret)
+		}
+		if !reflect.DeepEqual(gitRevision, cause.GitLabWebHook.Revision) {
+			t.Errorf("Expected return revision to match")
+		}
+	}
+}
+
+func TestInstantiateBuildTriggerCauseBitbucketWebHook(t *testing.T) {
+	buildTriggerCauses := []buildapi.BuildTriggerCause{}
+	changeMessage := buildapi.BuildTriggerCauseBitbucketMsg
+	webHookSecret := "testsecret"
+
+	gitRevision := &buildapi.SourceRevision{
+		Git: &buildapi.GitSourceRevision{
+			Author: buildapi.SourceControlUser{
+				Name:  "John Doe",
+				Email: "johndoe@test.com",
+			},
+			Message: "A random act of kindness",
+		},
+	}
+
+	buildRequest := &buildapi.BuildRequest{
+		TriggeredBy: append(buildTriggerCauses,
+			buildapi.BuildTriggerCause{
+				Message: changeMessage,
+				BitbucketWebHook: &buildapi.BitbucketWebHookCause{
+					CommonWebHookCause: buildapi.CommonWebHookCause{
+						Secret:   webHookSecret,
+						Revision: gitRevision,
+					},
+				},
+			},
+		),
+	}
+
+	generator := mockBuildGenerator()
+	buildObject, err := generator.Instantiate(kapi.NewDefaultContext(), buildRequest)
+	if err != nil {
+		t.Errorf("Expected error to be nil, got %v", err)
+	}
+	for _, cause := range buildObject.Spec.TriggeredBy {
+		if cause.Message != changeMessage {
+			t.Errorf("Expected reason %s, got %s", changeMessage, cause.Message)
+		}
+		if cause.BitbucketWebHook.Secret != webHookSecret {
+			t.Errorf("Expected WebHook secret %s, got %s", webHookSecret, cause.BitbucketWebHook.Secret)
+		}
+		if !reflect.DeepEqual(gitRevision, cause.BitbucketWebHook.Revision) {
 			t.Errorf("Expected return revision to match")
 		}
 	}

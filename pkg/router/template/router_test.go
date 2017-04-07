@@ -207,8 +207,8 @@ func TestRouteKey(t *testing.T) {
 
 	key := router.routeKey(route)
 
-	if key != "foo_bar" {
-		t.Errorf("Expected key 'foo_bar' but got: %s", key)
+	if key != "foo:bar" {
+		t.Errorf("Expected key 'foo:bar' but got: %s", key)
 	}
 
 	testCases := []struct {
@@ -323,9 +323,11 @@ func TestCreateServiceAliasConfig(t *testing.T) {
 
 	// Basic sanity, validate more fields as necessary
 	if config.Host != route.Spec.Host || config.Path != route.Spec.Path || !compareTLS(route, config, t) ||
-		config.PreferPort != route.Spec.Port.TargetPort.String() || !reflect.DeepEqual(expectedSUs, config.ServiceUnitNames) {
+		config.PreferPort != route.Spec.Port.TargetPort.String() || !reflect.DeepEqual(expectedSUs, config.ServiceUnitNames) ||
+		config.ActiveServiceUnits != 1 {
 		t.Errorf("Route %v did not match service alias config %v", route, config)
 	}
+
 }
 
 // TestAddRoute validates that adding a route creates a service alias config and associated service units

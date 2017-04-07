@@ -155,7 +155,7 @@ var _ = g.Describe("deploymentconfigs", func() {
 
 			g.By(fmt.Sprintf("by checking that the second deployment exists"))
 			// TODO when #11016 gets fixed this can be reverted to 30seconds
-			err = wait.PollImmediate(500*time.Millisecond, 1*time.Minute, func() (bool, error) {
+			err = wait.PollImmediate(500*time.Millisecond, 5*time.Minute, func() (bool, error) {
 				_, rcs, _, err := deploymentInfo(oc, name)
 				if err != nil {
 					return false, nil
@@ -197,35 +197,41 @@ var _ = g.Describe("deploymentconfigs", func() {
 		})
 	})
 
-	g.It("should respect image stream tag reference policy [Conformance]", func() {
-		o.Expect(oc.Run("create").Args("-f", resolutionFixture).Execute()).NotTo(o.HaveOccurred())
+	g.Describe("should respect image stream tag reference policy [Conformance]", func() {
+		g.AfterEach(func() {
+			failureTrap(oc, "deployment-image-resolution", g.CurrentGinkgoTestDescription().Failed)
+		})
 
-		name := "deployment-image-resolution"
-		o.Expect(waitForLatestCondition(oc, name, deploymentRunTimeout, deploymentImageTriggersResolved(2))).NotTo(o.HaveOccurred())
+		g.It("resolve the image pull spec", func() {
+			o.Expect(oc.Run("create").Args("-f", resolutionFixture).Execute()).NotTo(o.HaveOccurred())
 
-		is, err := oc.Client().ImageStreams(oc.Namespace()).Get(name)
-		o.Expect(err).NotTo(o.HaveOccurred())
-		o.Expect(is.Status.DockerImageRepository).NotTo(o.BeEmpty())
-		o.Expect(is.Status.Tags["direct"].Items).NotTo(o.BeEmpty())
-		o.Expect(is.Status.Tags["pullthrough"].Items).NotTo(o.BeEmpty())
+			name := "deployment-image-resolution"
+			o.Expect(waitForLatestCondition(oc, name, deploymentRunTimeout, deploymentImageTriggersResolved(2))).NotTo(o.HaveOccurred())
 
-		dc, err := oc.Client().DeploymentConfigs(oc.Namespace()).Get(name)
-		o.Expect(err).NotTo(o.HaveOccurred())
-		o.Expect(dc.Spec.Triggers).To(o.HaveLen(3))
+			is, err := oc.Client().ImageStreams(oc.Namespace()).Get(name)
+			o.Expect(err).NotTo(o.HaveOccurred())
+			o.Expect(is.Status.DockerImageRepository).NotTo(o.BeEmpty())
+			o.Expect(is.Status.Tags["direct"].Items).NotTo(o.BeEmpty())
+			o.Expect(is.Status.Tags["pullthrough"].Items).NotTo(o.BeEmpty())
 
-		imageID := is.Status.Tags["pullthrough"].Items[0].Image
-		resolvedReference := fmt.Sprintf("%s@%s", is.Status.DockerImageRepository, imageID)
-		directReference := is.Status.Tags["direct"].Items[0].DockerImageReference
+			dc, err := oc.Client().DeploymentConfigs(oc.Namespace()).Get(name)
+			o.Expect(err).NotTo(o.HaveOccurred())
+			o.Expect(dc.Spec.Triggers).To(o.HaveLen(3))
 
-		// controller should be using pullthrough for this (pointing to local registry)
-		o.Expect(dc.Spec.Triggers[1].ImageChangeParams).NotTo(o.BeNil())
-		o.Expect(dc.Spec.Triggers[1].ImageChangeParams.LastTriggeredImage).To(o.Equal(resolvedReference))
-		o.Expect(dc.Spec.Template.Spec.Containers[0].Image).To(o.Equal(resolvedReference))
+			imageID := is.Status.Tags["pullthrough"].Items[0].Image
+			resolvedReference := fmt.Sprintf("%s@%s", is.Status.DockerImageRepository, imageID)
+			directReference := is.Status.Tags["direct"].Items[0].DockerImageReference
 
-		// controller should have preferred the base image
-		o.Expect(dc.Spec.Triggers[2].ImageChangeParams).NotTo(o.BeNil())
-		o.Expect(dc.Spec.Triggers[2].ImageChangeParams.LastTriggeredImage).To(o.Equal(directReference))
-		o.Expect(dc.Spec.Template.Spec.Containers[1].Image).To(o.Equal(directReference))
+			// controller should be using pullthrough for this (pointing to local registry)
+			o.Expect(dc.Spec.Triggers[1].ImageChangeParams).NotTo(o.BeNil())
+			o.Expect(dc.Spec.Triggers[1].ImageChangeParams.LastTriggeredImage).To(o.Equal(resolvedReference))
+			o.Expect(dc.Spec.Template.Spec.Containers[0].Image).To(o.Equal(resolvedReference))
+
+			// controller should have preferred the base image
+			o.Expect(dc.Spec.Triggers[2].ImageChangeParams).NotTo(o.BeNil())
+			o.Expect(dc.Spec.Triggers[2].ImageChangeParams.LastTriggeredImage).To(o.Equal(directReference))
+			o.Expect(dc.Spec.Template.Spec.Containers[1].Image).To(o.Equal(directReference))
+		})
 	})
 
 	g.Describe("with test deployments [Conformance]", func() {
@@ -270,10 +276,26 @@ var _ = g.Describe("deploymentconfigs", func() {
 
 			g.By("deploying a few more times")
 			for i := 0; i < 3; i++ {
-				out, err = oc.Run("deploy").Args("--latest", "--follow", "deployment-test").Output()
-				o.Expect(err).NotTo(o.HaveOccurred())
+				rolloutCompleteWithLogs := make(chan struct{})
+				out := ""
+				go func(rolloutNumber int) {
+					var err error
+					defer func() {
+						close(rolloutCompleteWithLogs)
+						g.GinkgoRecover()
+					}()
+					out, err = waitForDeployerToComplete(oc, fmt.Sprintf("deployment-test-%d", rolloutNumber), deploymentRunTimeout)
+					o.Expect(err).NotTo(o.HaveOccurred())
+				}(i + 2) // we already did 2 rollouts previously.
 
-				g.By("verifying the deployment is marked complete and scaled to zero")
+				// When the rollout latest is called, we already waiting for the replication
+				// controller to be created and scrubbing the deployer logs as soon as the
+				// deployer container runs.
+				_, err := oc.Run("rollout").Args("latest", "deployment-test").Output()
+				o.Expect(err).NotTo(o.HaveOccurred())
+				g.By(fmt.Sprintf("waiting for the rollout #%d to finish", i+2))
+				<-rolloutCompleteWithLogs
+				o.Expect(out).NotTo(o.BeEmpty())
 				o.Expect(waitForLatestCondition(oc, "deployment-test", deploymentRunTimeout, deploymentReachedCompletion)).NotTo(o.HaveOccurred())
 
 				g.By(fmt.Sprintf("checking the logs for substrings\n%s", out))
@@ -805,7 +827,7 @@ var _ = g.Describe("deploymentconfigs", func() {
 			selector := labels.Set(config.Spec.Selector).AsSelector()
 			opts := kapi.ListOptions{LabelSelector: selector}
 			ready := 0
-			if err := wait.PollImmediate(500*time.Millisecond, 1*time.Minute, func() (bool, error) {
+			if err := wait.PollImmediate(500*time.Millisecond, 3*time.Minute, func() (bool, error) {
 				pods, err := oc.KubeClient().Core().Pods(oc.Namespace()).List(opts)
 				if err != nil {
 					return false, nil

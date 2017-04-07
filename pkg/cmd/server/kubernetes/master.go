@@ -13,12 +13,14 @@ import (
 	kapi "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
+	"k8s.io/kubernetes/pkg/apis/certificates"
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	kcoreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
+	certcontroller "k8s.io/kubernetes/pkg/controller/certificates"
 	"k8s.io/kubernetes/pkg/controller/cronjob"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
@@ -43,9 +45,9 @@ import (
 	"k8s.io/kubernetes/pkg/runtime/serializer"
 	"k8s.io/kubernetes/pkg/storage"
 	utilwait "k8s.io/kubernetes/pkg/util/wait"
-
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
+	"k8s.io/kubernetes/pkg/volume/azure_dd"
 	"k8s.io/kubernetes/pkg/volume/cinder"
 	"k8s.io/kubernetes/pkg/volume/flexvolume"
 	"k8s.io/kubernetes/pkg/volume/gce_pd"
@@ -54,7 +56,6 @@ import (
 	"k8s.io/kubernetes/pkg/volume/nfs"
 	"k8s.io/kubernetes/pkg/volume/rbd"
 	"k8s.io/kubernetes/pkg/volume/vsphere_volume"
-
 	"k8s.io/kubernetes/plugin/pkg/scheduler"
 	_ "k8s.io/kubernetes/plugin/pkg/scheduler/algorithmprovider"
 	schedulerapi "k8s.io/kubernetes/plugin/pkg/scheduler/api"
@@ -108,6 +109,9 @@ func (c *MasterConfig) RunPersistentVolumeController(client *kclientset.Clientse
 
 func (c *MasterConfig) RunPersistentVolumeAttachDetachController(client *kclientset.Clientset) {
 	s := c.ControllerManager
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink((&kcoreclient.EventSinkImpl{Interface: c.KubeClient.Core().Events("")}))
+	recorder := eventBroadcaster.NewRecorder(kapi.EventSource{Component: "controller-manager"})
 	attachDetachController, err :=
 		attachdetachcontroller.NewAttachDetachController(
 			client,
@@ -117,7 +121,9 @@ func (c *MasterConfig) RunPersistentVolumeAttachDetachController(client *kclient
 			c.Informers.KubernetesInformers().PersistentVolumes().Informer(),
 			c.CloudProvider,
 			kctrlmgr.ProbeAttachableVolumePlugins(s.VolumeConfiguration),
-			nil,
+			recorder,
+			s.DisableAttachDetachReconcilerSync,
+			s.ReconcilerSyncLoopPeriod.Duration,
 		)
 	if err != nil {
 		glog.Fatalf("Failed to start attach/detach controller: %v", err)
@@ -177,6 +183,7 @@ func probeRecyclableVolumePlugins(config componentconfig.VolumeConfiguration, na
 	allPlugins = append(allPlugins, vsphere_volume.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, glusterfs.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, rbd.ProbeVolumePlugins()...)
+	allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
 
 	return allPlugins
 }
@@ -396,4 +403,29 @@ func (c *MasterConfig) createSchedulerConfig() (*scheduler.Config, error) {
 
 	// if the config file isn't provided, use the default provider
 	return configFactory.CreateFromProvider(factory.DefaultProvider)
+}
+
+type noAutoApproval struct{}
+
+func (noAutoApproval) AutoApprove(csr *certificates.CertificateSigningRequest) (*certificates.CertificateSigningRequest, error) {
+	return csr, nil
+}
+
+func (c *MasterConfig) RunCertificateSigningController(clientset *kclientset.Clientset) {
+	if len(c.ControllerManager.ClusterSigningCertFile) == 0 || len(c.ControllerManager.ClusterSigningKeyFile) == 0 {
+		glog.V(2).Infof("Certificate signer controller will not start - no signing key or cert set")
+		return
+	}
+	resyncPeriod := kctrlmgr.ResyncPeriod(c.ControllerManager)()
+	certController, err := certcontroller.NewCertificateController(
+		clientset,
+		resyncPeriod,
+		c.ControllerManager.ClusterSigningCertFile,
+		c.ControllerManager.ClusterSigningKeyFile,
+		c.ControllerManager.ApproveAllKubeletCSRsForGroup,
+	)
+	if err != nil {
+		glog.Fatalf("Failed to start certificate controller: %v", err)
+	}
+	go certController.Run(1, utilwait.NeverStop)
 }

@@ -39,7 +39,6 @@ type restrictUsersAdmission struct {
 
 var _ = oadmission.WantsOpenshiftClient(&restrictUsersAdmission{})
 var _ = oadmission.WantsGroupCache(&restrictUsersAdmission{})
-var _ = oadmission.Validator(&restrictUsersAdmission{})
 
 // NewRestrictUsersAdmission configures an admission plugin that enforces
 // restrictions on adding role bindings in a project.
@@ -86,9 +85,9 @@ func objectReferenceDelta(elementsToIgnore, elements []kapi.ObjectReference) []k
 // in the namespace.
 func (q *restrictUsersAdmission) Admit(a admission.Attributes) (err error) {
 	// We only care about rolebindings and policybindings; ignore anything else.
-	switch a.GetResource().GroupResource() {
-	case authorizationapi.Resource("rolebindings"):
-	case authorizationapi.Resource("policybindings"):
+	gr := a.GetResource().GroupResource()
+	switch {
+	case authorizationapi.IsResourceOrLegacy("policybindings", gr), authorizationapi.IsResourceOrLegacy("rolebindings", gr):
 	default:
 		return nil
 	}
@@ -107,12 +106,12 @@ func (q *restrictUsersAdmission) Admit(a admission.Attributes) (err error) {
 	var subjects, oldSubjects []kapi.ObjectReference
 
 	obj, oldObj := a.GetObject(), a.GetOldObject()
-	switch a.GetResource().GroupResource() {
-	case authorizationapi.Resource("rolebindings"):
+	switch {
+	case authorizationapi.IsResourceOrLegacy("rolebindings", gr):
 		rolebinding, ok := obj.(*authorizationapi.RoleBinding)
 		if !ok {
 			return admission.NewForbidden(a,
-				fmt.Errorf("wrong object type for new rolebinding: %t", obj))
+				fmt.Errorf("wrong object type for new rolebinding: %T", obj))
 		}
 
 		subjects = rolebinding.Subjects
@@ -124,7 +123,7 @@ func (q *restrictUsersAdmission) Admit(a admission.Attributes) (err error) {
 			oldrolebinding, ok := oldObj.(*authorizationapi.RoleBinding)
 			if !ok {
 				return admission.NewForbidden(a,
-					fmt.Errorf("wrong object type for old rolebinding: %t", oldObj))
+					fmt.Errorf("wrong object type for old rolebinding: %T", oldObj))
 			}
 
 			oldSubjects = oldrolebinding.Subjects
@@ -133,11 +132,11 @@ func (q *restrictUsersAdmission) Admit(a admission.Attributes) (err error) {
 		glog.V(4).Infof("Handling rolebinding %s/%s",
 			rolebinding.Namespace, rolebinding.Name)
 
-	case authorizationapi.Resource("policybindings"):
+	case authorizationapi.IsResourceOrLegacy("policybindings", gr):
 		policybinding, ok := obj.(*authorizationapi.PolicyBinding)
 		if !ok {
 			return admission.NewForbidden(a,
-				fmt.Errorf("wrong object type for new policybinding: %t", obj))
+				fmt.Errorf("wrong object type for new policybinding: %T", obj))
 		}
 
 		for _, rolebinding := range policybinding.RoleBindings {
@@ -151,7 +150,7 @@ func (q *restrictUsersAdmission) Admit(a admission.Attributes) (err error) {
 			oldpolicybinding, ok := oldObj.(*authorizationapi.PolicyBinding)
 			if !ok {
 				return admission.NewForbidden(a,
-					fmt.Errorf("wrong object type for old policybinding: %t", oldObj))
+					fmt.Errorf("wrong object type for old policybinding: %T", oldObj))
 			}
 
 			for _, rolebinding := range oldpolicybinding.RoleBindings {

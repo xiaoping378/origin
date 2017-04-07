@@ -112,9 +112,9 @@ os::test::junit::declare_suite_end
 
 os::test::junit::declare_suite_start "cmd/admin/groups"
 os::cmd::expect_success_and_text 'oadm groups new shortoutputgroup -o name' 'group/shortoutputgroup'
-os::cmd::expect_failure_and_text 'oadm groups new shortoutputgroup' 'groups "shortoutputgroup" already exists'
+os::cmd::expect_failure_and_text 'oadm groups new shortoutputgroup' 'groups.user.openshift.io "shortoutputgroup" already exists'
 os::cmd::expect_failure_and_text 'oadm groups new errorgroup -o blah' 'error: output format "blah" not recognized'
-os::cmd::expect_failure_and_text 'oc get groups/errorgroup' 'groups "errorgroup" not found'
+os::cmd::expect_failure_and_text 'oc get groups/errorgroup' 'groups.user.openshift.io "errorgroup" not found'
 os::cmd::expect_success_and_text 'oadm groups new group1 foo bar' 'group1.*foo, bar'
 os::cmd::expect_success_and_text 'oc get groups/group1 --no-headers' 'foo, bar'
 os::cmd::expect_success 'oadm groups add-users group1 baz'
@@ -267,6 +267,20 @@ os::cmd::expect_success "oadm policy reconcile-cluster-role-bindings --confirm"
 echo "admin-role-reapers: ok"
 os::test::junit::declare_suite_end
 
+os::test::junit::declare_suite_start "cmd/admin/role-selectors"
+os::cmd::expect_success "oc create -f test/extended/testdata/roles/policy-clusterroles.yaml"
+os::cmd::expect_success "oc get clusterrole/basic-user2"
+os::cmd::expect_success "oc label clusterrole/basic-user2 foo=bar"
+os::cmd::expect_success_and_not_text "oc get clusterroles --selector=foo=bar" "No resources found"
+os::cmd::expect_success_and_text "oc get clusterroles --selector=foo=unknown" "No resources found"
+os::cmd::expect_success "oc get clusterrolebinding/basic-users2"
+os::cmd::expect_success "oc label clusterrolebinding/basic-users2 foo=bar"
+os::cmd::expect_success_and_not_text "oc get clusterrolebindings --selector=foo=bar" "No resources found"
+os::cmd::expect_success_and_text "oc get clusterroles --selector=foo=unknown" "No resources found"
+os::cmd::expect_success "oc delete clusterrole/basic-user2"
+os::test::junit::declare_suite_end
+echo "admin-role-selectors: ok"
+
 os::test::junit::declare_suite_start "cmd/admin/ui-project-commands"
 # Test the commands the UI projects page tells users to run
 # These should match what is described in projects.html
@@ -293,11 +307,9 @@ os::test::junit::declare_suite_end
 os::test::junit::declare_suite_start "cmd/admin/router"
 # Test running a router
 os::cmd::expect_failure_and_text 'oadm router --dry-run' 'does not exist'
-encoded_json='{"kind":"ServiceAccount","apiVersion":"v1","metadata":{"name":"router"}}'
-os::cmd::expect_success "echo '${encoded_json}' | oc create -f - -n default"
 os::cmd::expect_success "oadm policy add-scc-to-user privileged system:serviceaccount:default:router"
-os::cmd::expect_success_and_text "oadm router -o yaml --credentials=${KUBECONFIG} --service-account=router -n default" 'image:.*\-haproxy\-router:'
-os::cmd::expect_success "oadm router --credentials=${KUBECONFIG} --images='${USE_IMAGES}' --service-account=router -n default"
+os::cmd::expect_success_and_text "oadm router -o yaml --service-account=router -n default" 'image:.*\-haproxy\-router:'
+os::cmd::expect_success "oadm router --images='${USE_IMAGES}' --service-account=router -n default"
 os::cmd::expect_success_and_text 'oadm router -n default' 'service exists'
 os::cmd::expect_success_and_text 'oc get dc/router -o yaml -n default' 'readinessProbe'
 echo "router: ok"
@@ -312,7 +324,7 @@ os::cmd::expect_success "oadm registry --daemonset --images='${USE_IMAGES}'"
 os::cmd::expect_success_and_text 'oadm registry --daemonset' 'service exists'
 os::cmd::try_until_text 'oc get ds/docker-registry --template="{{.status.desiredNumberScheduled}}"' '1'
 # clean up so we can test non-daemonset
-os::cmd::expect_success "oc delete ds/docker-registry svc/docker-registry sa/registry clusterrolebinding/registry-registry-role"
+os::cmd::expect_success "oadm registry --daemonset -o yaml | oc delete -f -"
 echo "registry daemonset: ok"
 
 # Test running a registry
@@ -328,7 +340,7 @@ os::test::junit::declare_suite_end
 
 os::test::junit::declare_suite_start "cmd/admin/apply"
 workingdir=$(mktemp -d)
-os::cmd::expect_success "oadm registry --credentials=${KUBECONFIG} -o yaml > ${workingdir}/oadm_registry.yaml"
+os::cmd::expect_success "oadm registry -o yaml > ${workingdir}/oadm_registry.yaml"
 os::util::sed "s/5000/6000/g" ${workingdir}/oadm_registry.yaml
 os::cmd::expect_success "oc apply -f ${workingdir}/oadm_registry.yaml"
 os::cmd::expect_success_and_text 'oc get dc/docker-registry -o yaml' '6000'
@@ -493,6 +505,7 @@ os::test::junit::declare_suite_start "cmd/admin/images"
 os::cmd::expect_success "oc create -f ${OS_ROOT}/test/testdata/stable-busybox.yaml"
 os::cmd::expect_success_and_text "oadm top images" "sha256:a59906e33509d14c036c8678d687bd4eec81ed7c4b8ce907b888c607f6a1e0e6\W+default/busybox \(latest\)\W+<none>\W+<none>\W+yes\W+0\.65MiB"
 os::cmd::expect_success_and_text "oadm top imagestreams" "default/busybox\W+0.65MiB\W+1\W+1"
+os::cmd::expect_success "oc delete is/busybox -n default"
 
 # log in as an image-pruner and test that oadm prune images works against the atomic binary
 os::cmd::expect_success "oadm policy add-cluster-role-to-user system:image-pruner pruner --config='${MASTER_CONFIG_DIR}/admin.kubeconfig'"

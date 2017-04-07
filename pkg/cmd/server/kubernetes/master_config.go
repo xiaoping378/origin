@@ -4,9 +4,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,10 +28,11 @@ import (
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
 	"k8s.io/kubernetes/pkg/auth/authenticator"
+	"k8s.io/kubernetes/pkg/auth/authorizer"
 	kclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/genericapiserver"
-	"k8s.io/kubernetes/pkg/genericapiserver/authorizer"
+	kgenericfilters "k8s.io/kubernetes/pkg/genericapiserver/filters"
 	openapicommon "k8s.io/kubernetes/pkg/genericapiserver/openapi/common"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
@@ -48,12 +51,17 @@ import (
 	"github.com/openshift/origin/pkg/api"
 	"github.com/openshift/origin/pkg/cmd/flagtypes"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	"github.com/openshift/origin/pkg/cmd/server/election"
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
 	"github.com/openshift/origin/pkg/controller/shared"
 	openapigenerated "github.com/openshift/origin/pkg/openapi"
 	"github.com/openshift/origin/pkg/version"
 )
+
+// request paths that match this regular expression will be treated as long running
+// and not subjected to the default server timeout.
+const originLongRunningEndpointsRE = "(/|^)buildconfigs/.*/instantiatebinary$"
 
 var LegacyAPIGroupPrefixes = sets.NewString(genericapiserver.DefaultLegacyAPIPrefix, api.Prefix, api.LegacyPrefix)
 
@@ -95,9 +103,10 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 
 	// Adjust defaults
 	server.EventTTL = 2 * time.Hour
+	server.GenericServerRunOptions.AnonymousAuth = true
 	server.GenericServerRunOptions.ServiceClusterIPRange = net.IPNet(flagtypes.DefaultIPNet(options.KubernetesMasterConfig.ServicesSubnet))
 	server.GenericServerRunOptions.ServiceNodePortRange = *portRange
-	server.GenericServerRunOptions.EnableProfiling = false
+	server.GenericServerRunOptions.EnableProfiling = true
 	server.GenericServerRunOptions.MasterCount = options.KubernetesMasterConfig.MasterCount
 
 	server.GenericServerRunOptions.SecurePort = port
@@ -105,6 +114,7 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 	server.GenericServerRunOptions.TLSCertFile = options.ServingInfo.ServerCert.CertFile
 	server.GenericServerRunOptions.TLSPrivateKeyFile = options.ServingInfo.ServerCert.KeyFile
 	server.GenericServerRunOptions.ClientCAFile = options.ServingInfo.ClientCA
+
 	server.GenericServerRunOptions.MaxRequestsInFlight = options.ServingInfo.MaxRequestsInFlight
 	server.GenericServerRunOptions.MinRequestTimeout = options.ServingInfo.RequestTimeoutSeconds
 	for _, nc := range options.ServingInfo.NamedCertificates {
@@ -183,13 +193,22 @@ func BuildDefaultAPIServer(options configapi.MasterConfig) (*apiserveroptions.Se
 		master.DefaultAPIResourceConfigSource(),
 	)*/
 	// the order here is important, it defines which version will be used for storage
-	storageFactory.AddCohabitatingResources(extensions.Resource("jobs"), batch.Resource("jobs"))
+	storageFactory.AddCohabitatingResources(batch.Resource("jobs"), extensions.Resource("jobs"))
 	storageFactory.AddCohabitatingResources(extensions.Resource("horizontalpodautoscalers"), autoscaling.Resource("horizontalpodautoscalers"))
 
 	return server, storageFactory, nil
 }
 
-func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextMapper kapi.RequestContextMapper, kubeClient kclientset.Interface, informers shared.InformerFactory, admissionControl admission.Interface, originAuthenticator authenticator.Request) (*MasterConfig, error) {
+// TODO this function's parameters need to be refactored
+func BuildKubernetesMasterConfig(
+	options configapi.MasterConfig,
+	requestContextMapper kapi.RequestContextMapper,
+	kubeClient kclientset.Interface,
+	informers shared.InformerFactory,
+	admissionControl admission.Interface,
+	originAuthenticator authenticator.Request,
+	kubeAuthorizer authorizer.Authorizer,
+) (*MasterConfig, error) {
 	if options.KubernetesMasterConfig == nil {
 		return nil, errors.New("insufficient information to build KubernetesMasterConfig")
 	}
@@ -205,6 +224,8 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	// Defaults are tested in TestCMServerDefaults
 	cmserver := cmapp.NewCMServer()
 	// Adjust defaults
+	cmserver.ClusterSigningCertFile = ""
+	cmserver.ClusterSigningKeyFile = ""
 	cmserver.Address = ""                   // no healthz endpoint
 	cmserver.Port = 0                       // no healthz endpoint
 	cmserver.EnableGarbageCollector = false // disabled until we add the controller
@@ -274,7 +295,7 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 
 	genericConfig.PublicAddress = publicAddress
 	genericConfig.Authenticator = originAuthenticator // this is used to fulfill the tokenreviews endpoint which is used by node authentication
-	genericConfig.Authorizer = authorizer.NewAlwaysAllowAuthorizer()
+	genericConfig.Authorizer = kubeAuthorizer         // this is used to fulfill the kube SAR endpoints
 	genericConfig.AdmissionControl = admissionControl
 	genericConfig.RequestContextMapper = requestContextMapper
 	genericConfig.APIResourceConfigSource = getAPIResourceConfig(options)
@@ -287,16 +308,37 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 	}
 	genericConfig.LoopbackClientConfig = loopbackClientConfig
 	genericConfig.LegacyAPIGroupPrefixes = LegacyAPIGroupPrefixes
+	genericConfig.SecureServingInfo.BindAddress = options.ServingInfo.BindAddress
 	genericConfig.SecureServingInfo.BindNetwork = options.ServingInfo.BindNetwork
-	genericConfig.SecureServingInfo.ExtraClientCACerts, err = configapi.GetOAuthClientCertCAs(options)
+	genericConfig.SecureServingInfo.MinTLSVersion = crypto.TLSVersionOrDie(options.ServingInfo.MinTLSVersion)
+	genericConfig.SecureServingInfo.CipherSuites = crypto.CipherSuitesOrDie(options.ServingInfo.CipherSuites)
+	oAuthClientCertCAs, err := configapi.GetOAuthClientCertCAs(options)
 	if err != nil {
 		glog.Fatalf("Error setting up OAuth2 client certificates: %v", err)
 	}
+	for _, cert := range oAuthClientCertCAs {
+		genericConfig.SecureServingInfo.ClientCA.AddCert(cert)
+	}
+	requestHeaderCACerts, err := configapi.GetRequestHeaderClientCertCAs(options)
+	if err != nil {
+		glog.Fatalf("Error setting up request header client certificates: %v", err)
+	}
+	for _, cert := range requestHeaderCACerts {
+		genericConfig.SecureServingInfo.ClientCA.AddCert(cert)
+	}
+
 	url, err := url.Parse(options.MasterPublicURL)
 	if err != nil {
 		glog.Fatalf("Error parsing master public url %q: %v", options.MasterPublicURL, err)
 	}
 	genericConfig.ExternalAddress = url.Host
+
+	originLongRunningRequestRE := regexp.MustCompile(originLongRunningEndpointsRE)
+	originLongRunningFunc := kgenericfilters.BasicLongRunningRequestCheck(originLongRunningRequestRE, nil)
+	kubeLongRunningFunc := genericConfig.LongRunningFunc
+	genericConfig.LongRunningFunc = func(r *http.Request) bool {
+		return originLongRunningFunc(r) || kubeLongRunningFunc(r)
+	}
 
 	serviceIPRange, apiServerServiceIP, err := genericapiserver.DefaultServiceIPRange(server.GenericServerRunOptions.ServiceClusterIPRange)
 	if err != nil {
@@ -407,14 +449,18 @@ func BuildKubernetesMasterConfig(options configapi.MasterConfig, requestContextM
 func DefaultOpenAPIConfig() *openapicommon.Config {
 	return &openapicommon.Config{
 		Definitions:    openapigenerated.OpenAPIDefinitions,
-		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift"},
+		IgnorePrefixes: []string{"/swaggerapi", "/healthz", "/controllers", "/metrics", "/version/openshift", "/brokers"},
 		GetOperationIDAndTags: func(servePath string, r *restful.Route) (string, []string, error) {
 			op := r.Operation
 			path := r.Path
-			//TODO/REBASE this is gross
+			// DEPRECATED: These endpoints are going to be removed in 1.8 or 1.9 release.
 			if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/processedtemplates") {
 				op = "createNamespacedProcessedTemplate"
+			} else if strings.HasPrefix(path, "/apis/template.openshift.io/v1/namespaces/{namespace}/processedtemplates") {
+				op = "createNamespacedProcessedTemplateV1"
 			} else if strings.HasPrefix(path, "/oapi/v1/processedtemplates") {
+				op = "createProcessedTemplateForAllNamespacesV1"
+			} else if strings.HasPrefix(path, "/apis/template.openshift.io/v1/processedtemplates") {
 				op = "createProcessedTemplateForAllNamespaces"
 			} else if strings.HasPrefix(path, "/oapi/v1/namespaces/{namespace}/generatedeploymentconfigs") {
 				op = "generateNamespacedDeploymentConfig"
@@ -524,4 +570,28 @@ func getAPIResourceConfig(options configapi.MasterConfig) genericapiserver.APIRe
 	}
 
 	return resourceConfig
+}
+
+// TODO remove this func in 1.6 when we get rid of the hack above
+func concatenateFiles(prefix, separator string, files ...string) (string, error) {
+	data := []byte{}
+	for _, file := range files {
+		fileBytes, err := ioutil.ReadFile(file)
+		if err != nil {
+			return "", err
+		}
+		data = append(data, fileBytes...)
+		data = append(data, []byte(separator)...)
+	}
+	tmpFile, err := ioutil.TempFile("", prefix)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", err
+	}
+	return tmpFile.Name(), nil
 }

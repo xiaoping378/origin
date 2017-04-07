@@ -88,7 +88,7 @@ func (r *REST) Create(ctx kapi.Context, obj runtime.Object) (runtime.Object, err
 				glog.Errorf("unable to fill PodSecurityPolicyReviewStatus from constraint %v", err)
 				continue
 			}
-			sapsprs := securityapi.ServiceAccountPodSecurityPolicyReviewStatus{pspsrs, sa.Name}
+			sapsprs := securityapi.ServiceAccountPodSecurityPolicyReviewStatus{PodSecurityPolicySubjectReviewStatus: pspsrs, Name: sa.Name}
 			newStatus.AllowedServiceAccounts = append(newStatus.AllowedServiceAccounts, sapsprs)
 		}
 	}
@@ -113,6 +113,7 @@ func getServiceAccounts(psprSpec securityapi.PodSecurityPolicyReviewSpec, saCach
 			sa, err := saCache.ServiceAccounts(namespace).Get(saName)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("unable to retrieve ServiceAccount %s: %v", saName, err))
+				continue
 			}
 			serviceAccounts = append(serviceAccounts, sa)
 		}

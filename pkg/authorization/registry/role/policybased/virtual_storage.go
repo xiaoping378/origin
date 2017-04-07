@@ -3,13 +3,13 @@ package policybased
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/retry"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/runtime"
 
@@ -47,23 +47,23 @@ func (m *VirtualStorage) NewList() runtime.Object {
 }
 
 func (m *VirtualStorage) List(ctx kapi.Context, options *kapi.ListOptions) (runtime.Object, error) {
-	policyList, err := m.PolicyStorage.ListPolicies(ctx, options)
+	policyList, err := m.PolicyStorage.ListPolicies(ctx, &kapi.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	labelSelector, fieldSelector := oapi.ListOptionsToSelectors(options)
+	matcher := roleregistry.Matcher(oapi.ListOptionsToSelectors(options))
 
 	roleList := &authorizationapi.RoleList{}
 	for _, policy := range policyList.Items {
 		for _, role := range policy.Roles {
-			if labelSelector.Matches(labels.Set(role.Labels)) &&
-				fieldSelector.Matches(authorizationapi.RoleToSelectableFields(role)) {
+			if matches, err := matcher.Matches(role); err == nil && matches {
 				roleList.Items = append(roleList.Items, *role)
 			}
 		}
 	}
 
+	sort.Sort(byName(roleList.Items))
 	return roleList, nil
 }
 
@@ -282,3 +282,9 @@ func NewEmptyPolicy(namespace string) *authorizationapi.Policy {
 
 	return policy
 }
+
+type byName []authorizationapi.Role
+
+func (r byName) Len() int           { return len(r) }
+func (r byName) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+func (r byName) Less(i, j int) bool { return r[i].Name < r[j].Name }

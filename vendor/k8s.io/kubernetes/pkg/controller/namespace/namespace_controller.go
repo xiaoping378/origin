@@ -35,6 +35,16 @@ import (
 	"github.com/golang/glog"
 )
 
+const (
+	// namespaceDeletionGracePeriod is the time period to wait before processing a received namespace event.
+	// This allows time for the following to occur:
+	// * lifecycle admission plugins on HA apiservers to also observe a namespace
+	//   deletion and prevent new objects from being created in the terminating namespace
+	// * non-leader etcd servers to observe last-minute object creations in a namespace
+	//   so this controller's cleanup can actually clean up all objects
+	namespaceDeletionGracePeriod = 5 * time.Second
+)
+
 // NamespaceController is responsible for performing actions dependent upon a namespace phase
 type NamespaceController struct {
 	// client that purges namespace content, must have list/delete privileges on all content
@@ -75,6 +85,12 @@ func NewNamespaceController(
 	}
 	ignoredGroupVersionResources := []unversioned.GroupVersionResource{
 		{Group: "", Version: "v1", Resource: "bindings"},
+
+		// FIXME: This should be removed after 1.6 rebase lands?
+		// The appliedclusterresourcequotas does not have the 'DELETE' verb implemented and
+		// without this the projects/namespaces are stuck in Terminating forever.
+		{Group: "", Version: "v1", Resource: "appliedclusterresourcequotas"},
+		{Group: "quota.openshift.io", Version: "v1", Resource: "appliedclusterresourcequotas"},
 	}
 	for _, ignoredGroupVersionResource := range ignoredGroupVersionResources {
 		opCache.setNotSupported(operationKey{op: operationDeleteCollection, gvr: ignoredGroupVersionResource})
@@ -132,7 +148,9 @@ func (nm *NamespaceController) enqueueNamespace(obj interface{}) {
 		glog.Errorf("Couldn't get key for object %+v: %v", obj, err)
 		return
 	}
-	nm.queue.Add(key)
+	// delay processing namespace events to allow HA api servers to observe namespace deletion,
+	// and HA etcd servers to observe last minute object creations inside the namespace
+	nm.queue.AddAfter(key, namespaceDeletionGracePeriod)
 }
 
 // worker processes the queue of namespace objects.

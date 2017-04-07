@@ -27,6 +27,7 @@ import (
 	"github.com/openshift/origin/pkg/cmd/admin/policy"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
 	"github.com/openshift/origin/pkg/cmd/server/bootstrappolicy"
+	"github.com/openshift/origin/pkg/version"
 )
 
 var (
@@ -83,6 +84,8 @@ func InitTest() {
 
 	// Ensure that Kube tests run privileged (like they do upstream)
 	TestContext.CreateTestingNS = createTestingNS
+
+	glog.Infof("Extended test version %s", version.Get().String())
 }
 
 func ExecuteTest(t *testing.T, suite string) {
@@ -165,13 +168,16 @@ func createTestingNS(baseName string, c kclientset.Interface, labels map[string]
 	// Add anyuid and privileged permissions for upstream tests
 	if isKubernetesE2ETest() && !skipTestNamespaceCustomization() {
 		e2e.Logf("About to run a Kube e2e test, ensuring namespace is privileged")
-		// add to the "privileged" scc to ensure pods that explicitly
+		// add the "privileged" scc to ensure pods that explicitly
 		// request extra capabilities are not rejected
 		addE2EServiceAccountsToSCC(c, []kapi.Namespace{*ns}, "privileged")
-		// add to the "anyuid" scc to ensure pods that don't specify a
+		// add the "anyuid" scc to ensure pods that don't specify a
 		// uid don't get forced into a range (mimics upstream
 		// behavior)
 		addE2EServiceAccountsToSCC(c, []kapi.Namespace{*ns}, "anyuid")
+		// add the "hostmount-anyuid" scc to ensure pods using hostPath
+		// can execute tests
+		addE2EServiceAccountsToSCC(c, []kapi.Namespace{*ns}, "hostmount-anyuid")
 
 		// The intra-pod test requires that the service account have
 		// permission to retrieve service endpoints.
@@ -182,7 +188,10 @@ func createTestingNS(baseName string, c kclientset.Interface, labels map[string]
 		addRoleToE2EServiceAccounts(osClient, []kapi.Namespace{*ns}, bootstrappolicy.ViewRoleName)
 	}
 
-	if isPackage("/kubernetes/test/e2e/scheduler_predicates.go") || isPackage("/kubernetes/test/e2e/rescheduler.go") {
+	// some test suites assume they can schedule to all nodes
+	switch {
+	case isPackage("/kubernetes/test/e2e/scheduler_predicates.go"), isPackage("/kubernetes/test/e2e/rescheduler.go"),
+		isPackage("/kubernetes/test/e2e/kubelet.go"), isPackage("/kubernetes/test/e2e/common/networking.go"):
 		allowAllNodeScheduling(c, ns.Name)
 	}
 

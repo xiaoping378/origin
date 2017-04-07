@@ -59,11 +59,7 @@ type MasterOptions struct {
 	DisabledFeatures   []string
 }
 
-func (o *MasterOptions) DefaultsFromName(basename string) {
-	if cmdutil.GetProductName(basename) == cmdutil.ProductAtomicEnterprise {
-		o.DisabledFeatures = configapi.AtomicDisabledFeatures
-	}
-}
+func (o *MasterOptions) DefaultsFromName(basename string) {}
 
 var masterLong = templates.LongDesc(`
 	Start a master server
@@ -359,10 +355,17 @@ func (o MasterOptions) CreateCerts() error {
 
 func BuildKubernetesMasterConfig(openshiftConfig *origin.MasterConfig) (*kubernetes.MasterConfig, error) {
 	if openshiftConfig.Options.KubernetesMasterConfig == nil {
-		return nil, nil
+		return nil, fmt.Errorf("KubernetesMasterConfig is required to start this server - use of external Kubernetes is no longer supported.")
 	}
-	kubeConfig, err := kubernetes.BuildKubernetesMasterConfig(openshiftConfig.Options, openshiftConfig.RequestContextMapper, openshiftConfig.KubeClientset(), openshiftConfig.Informers, openshiftConfig.KubeAdmissionControl, openshiftConfig.Authenticator)
-	return kubeConfig, err
+	return kubernetes.BuildKubernetesMasterConfig(
+		openshiftConfig.Options,
+		openshiftConfig.RequestContextMapper,
+		openshiftConfig.KubeClientset(),
+		openshiftConfig.Informers,
+		openshiftConfig.KubeAdmissionControl,
+		openshiftConfig.Authenticator,
+		openshiftConfig.Authorizer,
+	)
 }
 
 // Master encapsulates starting the components of the master
@@ -454,8 +457,7 @@ func (m *Master) Start() error {
 }
 
 func startHealth(openshiftConfig *origin.MasterConfig) error {
-	openshiftConfig.RunHealth()
-	return nil
+	return openshiftConfig.RunHealth()
 }
 
 // StartAPI starts the components of the master that are considered part of the API - the Kubernetes
@@ -497,18 +499,7 @@ func StartAPI(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) error {
 		}
 	}
 
-	if kc != nil {
-		oc.Run(kc, embeddedAssetConfig)
-	} else {
-		_, kubeClientConfig, err := configapi.GetKubeClient(oc.Options.MasterClients.ExternalKubernetesKubeConfig, oc.Options.MasterClients.ExternalKubernetesClientConnectionOverrides)
-		if err != nil {
-			return err
-		}
-		proxy := &kubernetes.ProxyConfig{
-			ClientConfig: kubeClientConfig,
-		}
-		oc.RunInProxyMode(proxy, embeddedAssetConfig)
-	}
+	oc.Run(kc, embeddedAssetConfig)
 
 	// start up the informers that we're trying to use in the API server
 	oc.Informers.KubernetesInformers().Start(utilwait.NeverStop)
@@ -657,9 +648,14 @@ func startControllers(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) erro
 			glog.Fatalf("Could not get client for pod gc controller: %v", err)
 		}
 
-		_, _, statefulSetClient, err := oc.GetServiceAccountClients(bootstrappolicy.InfraPetSetControllerServiceAccountName)
+		_, _, statefulSetClient, err := oc.GetServiceAccountClients(bootstrappolicy.InfraStatefulSetControllerServiceAccountName)
 		if err != nil {
 			glog.Fatalf("Could not get client for pet set controller: %v", err)
+		}
+
+		_, _, certificateSigningClient, err := oc.GetServiceAccountClients(bootstrappolicy.InfraCertificateSigningControllerServiceAccountName)
+		if err != nil {
+			glog.Fatalf("Could not get client for disruption budget controller: %v", err)
 		}
 
 		namespaceControllerClientConfig, _, namespaceControllerKubeClient, err := oc.GetServiceAccountClients(bootstrappolicy.InfraNamespaceControllerServiceAccountName)
@@ -713,6 +709,8 @@ func startControllers(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) erro
 
 		kc.RunServiceLoadBalancerController(serviceLoadBalancerClient)
 
+		kc.RunCertificateSigningController(certificateSigningClient)
+
 		appsEnabled := len(configapi.GetEnabledAPIVersionsForGroup(kc.Options, apps.GroupName)) > 0
 		if appsEnabled {
 			kc.RunStatefulSetController(statefulSetClient)
@@ -756,6 +754,10 @@ func startControllers(oc *origin.MasterConfig, kc *kubernetes.MasterConfig) erro
 		glog.Fatalf("Could not get client: %v", err)
 	}
 	oc.RunIngressIPController(ingressIPClient)
+
+	if oc.Options.EnableTemplateServiceBroker {
+		oc.RunTemplateController()
+	}
 
 	glog.Infof("Started Origin Controllers")
 

@@ -32,6 +32,7 @@ import (
 
 	osclient "github.com/openshift/origin/pkg/client"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	serverauthenticator "github.com/openshift/origin/pkg/cmd/server/authenticator"
 	"github.com/openshift/origin/pkg/cmd/server/crypto"
 	cmdutil "github.com/openshift/origin/pkg/cmd/util"
 	cmdflags "github.com/openshift/origin/pkg/cmd/util/flags"
@@ -160,8 +161,6 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 	server.CPUCFSQuota = true // enable cpu cfs quota enforcement by default
 	server.MaxPods = 250
 	server.PodsPerCore = 10
-	server.SerializeImagePulls = false          // disable serialized image pulls by default
-	server.EnableControllerAttachDetach = false // stay consistent with existing config, but admins should enable it
 	if enableDNS {
 		// if we are running local DNS, skydns will load the default recursive nameservers for us
 		server.ResolverConfig = ""
@@ -237,7 +236,7 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 	if err != nil {
 		return nil, err
 	}
-	authn, err := newAuthenticator(kubeClient.Authentication(), clientCAs, authnTTL, options.AuthConfig.AuthenticationCacheSize)
+	authn, err := serverauthenticator.NewRemoteAuthenticator(kubeClient.Authentication(), clientCAs, authnTTL, options.AuthConfig.AuthenticationCacheSize)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +273,8 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 				// Do not use NameToCertificate, since that requires certificates be included in the server's tlsConfig.Certificates list,
 				// which we do not control when running with http.Server#ListenAndServeTLS
 				GetCertificate: cmdutil.GetCertificateFunc(extraCerts),
+				MinVersion:     crypto.TLSVersionOrDie(options.ServingInfo.MinTLSVersion),
+				CipherSuites:   crypto.CipherSuitesOrDie(options.ServingInfo.CipherSuites),
 			}),
 			CertFile: options.ServingInfo.ServerCert.CertFile,
 			KeyFile:  options.ServingInfo.ServerCert.KeyFile,
@@ -314,11 +315,14 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 		if err != nil {
 			return nil, fmt.Errorf("DNS configuration was not possible: %v", err)
 		}
-		if len(options.DNSIP) > 0 {
-			dnsConfig.DnsAddr = options.DNSIP + ":53"
+		if len(options.DNSBindAddress) > 0 {
+			dnsConfig.DnsAddr = options.DNSBindAddress
 		}
 		dnsConfig.Domain = server.ClusterDomain + "."
 		dnsConfig.Local = "openshift.default.svc." + dnsConfig.Domain
+		if len(options.DNSNameservers) > 0 {
+			dnsConfig.Nameservers = options.DNSNameservers
+		}
 
 		services, serviceStore := dns.NewCachedServiceAccessorAndStore()
 		endpoints, endpointsStore := dns.NewCachedEndpointsAccessorAndStore()
@@ -329,7 +333,7 @@ func BuildKubernetesNodeConfig(options configapi.NodeConfig, enableProxy, enable
 
 		// TODO: use kubeletConfig.ResolverConfig as an argument to etcd in the event the
 		//   user sets it, instead of passing it to the kubelet.
-
+		glog.Infof("DNS Bind to %s", options.DNSBindAddress)
 		config.ServiceStore = serviceStore
 		config.EndpointsStore = endpointsStore
 		config.DNSServer = &dns.Server{

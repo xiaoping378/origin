@@ -6667,7 +6667,7 @@ func TestValidateServiceUpdate(t *testing.T) {
 				newSvc.Spec.Type = api.ServiceTypeLoadBalancer
 				newSvc.Spec.LoadBalancerSourceRanges = []string{"10.0.0.0/8"}
 			},
-			numErrs: 1,
+			numErrs: 0,
 		},
 		{
 			name: "update loadBalancerSourceRanges",
@@ -6677,7 +6677,7 @@ func TestValidateServiceUpdate(t *testing.T) {
 				newSvc.Spec.Type = api.ServiceTypeLoadBalancer
 				newSvc.Spec.LoadBalancerSourceRanges = []string{"10.180.0.0/16"}
 			},
-			numErrs: 1,
+			numErrs: 0,
 		},
 		{
 			name: "LoadBalancer type cannot have None ClusterIP",
@@ -8741,6 +8741,10 @@ func TestValidateSecurityContextConstraints(t *testing.T) {
 	allowedCapListedInRequiredDrop.RequiredDropCapabilities = []api.Capability{"foo"}
 	allowedCapListedInRequiredDrop.AllowedCapabilities = []api.Capability{"foo"}
 
+	wildcardAllowedCapAndRequiredDrop := validSCC()
+	wildcardAllowedCapAndRequiredDrop.RequiredDropCapabilities = []api.Capability{"foo"}
+	wildcardAllowedCapAndRequiredDrop.AllowedCapabilities = []api.Capability{api.CapabilityAll}
+
 	errorCases := map[string]struct {
 		scc         *api.SecurityContextConstraints
 		errorType   field.ErrorType
@@ -8825,6 +8829,11 @@ func TestValidateSecurityContextConstraints(t *testing.T) {
 			scc:         allowedCapListedInRequiredDrop,
 			errorType:   field.ErrorTypeInvalid,
 			errorDetail: "capability is listed in allowedCapabilities and requiredDropCapabilities",
+		},
+		"all caps allowed by a wildcard and required drops is not empty": {
+			scc:         wildcardAllowedCapAndRequiredDrop,
+			errorType:   field.ErrorTypeInvalid,
+			errorDetail: "required capabilities must be empty when all capabilities are allowed by a wildcard",
 		},
 	}
 

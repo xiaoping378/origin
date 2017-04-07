@@ -23,19 +23,21 @@ type masterVNIDMap struct {
 	ids          map[string]uint32
 	netIDManager *pnetid.Allocator
 
-	adminNamespaces sets.String
+	adminNamespaces  sets.String
+	allowRenumbering bool
 }
 
-func newMasterVNIDMap() *masterVNIDMap {
+func newMasterVNIDMap(allowRenumbering bool) *masterVNIDMap {
 	netIDRange, err := pnetid.NewNetIDRange(osapi.MinVNID, osapi.MaxVNID)
 	if err != nil {
 		panic(err)
 	}
 
 	return &masterVNIDMap{
-		netIDManager:    pnetid.NewInMemory(netIDRange),
-		adminNamespaces: sets.NewString(kapi.NamespaceDefault),
-		ids:             make(map[string]uint32),
+		netIDManager:     pnetid.NewInMemory(netIDRange),
+		adminNamespaces:  sets.NewString(kapi.NamespaceDefault),
+		ids:              make(map[string]uint32),
+		allowRenumbering: allowRenumbering,
 	}
 }
 
@@ -242,6 +244,10 @@ func (vmap *masterVNIDMap) updateVNID(osClient *osclient.Client, netns *osapi.Ne
 	if err == osapi.ErrorPodNetworkAnnotationNotFound {
 		// Nothing to update
 		return nil
+	} else if !vmap.allowRenumbering {
+		osapi.DeleteChangePodNetworkAnnotation(netns)
+		_, _ = osClient.NetNamespaces().Update(netns)
+		return fmt.Errorf("network plugin does not allow NetNamespace renumbering")
 	}
 
 	vmap.lock.Lock()
@@ -282,11 +288,11 @@ func (master *OsdnMaster) watchNamespaces() {
 		switch delta.Type {
 		case cache.Sync, cache.Added, cache.Updated:
 			if err := master.vnids.assignVNID(master.osClient, name); err != nil {
-				return fmt.Errorf("Error assigning netid: %v", err)
+				return fmt.Errorf("error assigning netid: %v", err)
 			}
 		case cache.Deleted:
 			if err := master.vnids.revokeVNID(master.osClient, name); err != nil {
-				return fmt.Errorf("Error revoking netid: %v", err)
+				return fmt.Errorf("error revoking netid: %v", err)
 			}
 		}
 		return nil
@@ -303,7 +309,7 @@ func (master *OsdnMaster) watchNetNamespaces() {
 		case cache.Sync, cache.Added, cache.Updated:
 			err := master.vnids.updateVNID(master.osClient, netns)
 			if err != nil {
-				return fmt.Errorf("Error updating netid: %v", err)
+				return fmt.Errorf("error updating netid: %v", err)
 			}
 		}
 		return nil

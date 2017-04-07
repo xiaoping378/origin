@@ -2,13 +2,13 @@ package builder
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/builder/dockerfile/parser"
 	"github.com/fsouza/go-dockerclient"
 	kapi "k8s.io/kubernetes/pkg/api"
 
@@ -16,9 +16,8 @@ import (
 	s2iutil "github.com/openshift/source-to-image/pkg/util"
 
 	"github.com/openshift/origin/pkg/build/api"
+	"github.com/openshift/origin/pkg/build/util/dockerfile"
 	"github.com/openshift/origin/pkg/generate/git"
-	"github.com/openshift/origin/pkg/util/docker/dockerfile"
-	"github.com/openshift/origin/test/util"
 )
 
 func TestInsertEnvAfterFrom(t *testing.T) {
@@ -69,12 +68,12 @@ ENV "PATH"="/bin" "GOPATH"="/go" "PATH"="/go/bin:$PATH"
 RUN echo "hello world"`},
 	}
 	for name, test := range tests {
-		got, err := parser.Parse(strings.NewReader(test.original))
+		got, err := dockerfile.Parse(strings.NewReader(test.original))
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		want, err := parser.Parse(strings.NewReader(test.want))
+		want, err := dockerfile.Parse(strings.NewReader(test.want))
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
@@ -121,12 +120,12 @@ RUN echo "hello world"
 		},
 	}
 	for i, test := range tests {
-		got, err := parser.Parse(strings.NewReader(test.original))
+		got, err := dockerfile.Parse(strings.NewReader(test.original))
 		if err != nil {
 			t.Errorf("test[%d]: %v", i, err)
 			continue
 		}
-		want, err := parser.Parse(strings.NewReader(test.want))
+		want, err := dockerfile.Parse(strings.NewReader(test.want))
 		if err != nil {
 			t.Errorf("test[%d]: %v", i, err)
 			continue
@@ -193,11 +192,17 @@ func TestDockerfilePath(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		buildDir, err := ioutil.TempDir(util.GetBaseDir(), "dockerfile-path")
+		buildDir, err := ioutil.TempDir("", "dockerfile-path")
 		if err != nil {
 			t.Errorf("failed to create tmpdir: %v", err)
 			continue
 		}
+		defer func() {
+			if err := os.RemoveAll(buildDir); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
 		absoluteDockerfilePath := filepath.Join(buildDir, test.contextDir, test.dockerfilePath)
 		if err = os.MkdirAll(filepath.Dir(absoluteDockerfilePath), os.FileMode(0750)); err != nil {
 			t.Errorf("failed to create directory %s: %v", filepath.Dir(absoluteDockerfilePath), err)
@@ -314,6 +319,66 @@ func TestEmptySource(t *testing.T) {
 		}
 	}
 }
+
+// We should not be able to try to pull from scratch
+func TestDockerfileFromScratch(t *testing.T) {
+	dockerFile := `FROM scratch
+USER 1001`
+
+	dockerClient := &FakeDocker{
+		buildImageFunc: func(opts docker.BuildImageOptions) error {
+			return nil
+		},
+		pullImageFunc: func(opts docker.PullImageOptions, auth docker.AuthConfiguration) error {
+			if opts.Repository == "scratch" && opts.Registry == "" {
+				return fmt.Errorf("cannot pull scratch")
+			}
+			return nil
+		},
+	}
+
+	build := &api.Build{
+		Spec: api.BuildSpec{
+			CommonSpec: api.CommonSpec{
+				Source: api.BuildSource{
+					ContextDir: "",
+					Dockerfile: &dockerFile,
+				},
+				Strategy: api.BuildStrategy{
+					DockerStrategy: &api.DockerBuildStrategy{
+						DockerfilePath: "",
+						From: &kapi.ObjectReference{
+							Kind: "DockerImage",
+							Name: "scratch",
+						},
+					},
+				},
+				Output: api.BuildOutput{
+					To: &kapi.ObjectReference{
+						Kind: "ImageStreamTag",
+						Name: "scratch",
+					},
+				},
+			},
+		},
+	}
+
+	dockerBuilder := &DockerBuilder{
+		build:        build,
+		dockerClient: dockerClient,
+		gitClient:    git.NewRepository(),
+		tar:          tar.New(s2iutil.NewFileSystem()),
+	}
+
+	if err := dockerBuilder.Build(); err != nil {
+		if strings.Contains(err.Error(), "cannot pull scratch") {
+			t.Errorf("Docker build should not have attempted to pull from scratch")
+		} else {
+			t.Errorf("Received unexpected error: %v", err)
+		}
+	}
+}
+
 func TestGetDockerfileFrom(t *testing.T) {
 	tests := map[string]struct {
 		dockerfileContent string
@@ -338,12 +403,18 @@ RUN echo "hello world"
 			want: []string{"scratch", "busybox"},
 		},
 	}
+
 	for i, test := range tests {
-		buildDir, err := ioutil.TempDir(util.GetBaseDir(), "dockerfile-path")
+		buildDir, err := ioutil.TempDir("", "dockerfile-path")
 		if err != nil {
 			t.Errorf("failed to create tmpdir: %v", err)
 			continue
 		}
+		defer func() {
+			if err := os.RemoveAll(buildDir); err != nil {
+				t.Fatal(err)
+			}
+		}()
 		dockerfilePath := filepath.Join(buildDir, defaultDockerfilePath)
 		dockerfileContent := test.dockerfileContent
 		if err = os.MkdirAll(filepath.Dir(dockerfilePath), os.FileMode(0750)); err != nil {

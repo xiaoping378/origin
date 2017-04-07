@@ -112,6 +112,7 @@ func (h *Helper) InstallLogging(f *clientcmd.Factory, publicHostname, loggerHost
 		"public-master-url": fmt.Sprintf("https://%s:8443", publicHostname),
 		"es-cluster-size":   "1",
 		"es-instance-ram":   "1024M",
+		"es-pvc-size":       "100G",
 	}
 	kubeClient.Core().ConfigMaps(loggingNamespace).Create(loggingConfig)
 
@@ -132,5 +133,5 @@ func LoggingHost(routingSuffix, serverIP string) string {
 	if len(routingSuffix) > 0 {
 		return fmt.Sprintf("kibana-logging.%s", routingSuffix)
 	}
-	return fmt.Sprintf("kibana-logging.%s.xip.io", serverIP)
+	return fmt.Sprintf("kibana-logging.%s.nip.io", serverIP)
 }

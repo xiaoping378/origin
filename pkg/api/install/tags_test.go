@@ -85,6 +85,9 @@ func TestInternalJsonTags(t *testing.T) {
 var internalTypesWithAllowedJsonTags = sets.NewString("DockerConfig", "DockerImage")
 
 func checkInternalJsonTags(objType reflect.Type, seen *map[reflect.Type]bool, t *testing.T) {
+	if objType.Kind() != reflect.Struct {
+		return
+	}
 	if _, exists := (*seen)[objType]; exists {
 		return
 	}
@@ -93,6 +96,9 @@ func checkInternalJsonTags(objType reflect.Type, seen *map[reflect.Type]bool, t 
 		return
 	}
 	if internalTypesWithAllowedJsonTags.Has(objType.Name()) {
+		return
+	}
+	if objType.Kind() != reflect.Struct {
 		return
 	}
 
@@ -129,11 +135,18 @@ func TestExternalJsonTags(t *testing.T) {
 }
 
 func checkExternalJsonTags(objType reflect.Type, seen *map[reflect.Type]bool, t *testing.T) {
+	if objType.Kind() != reflect.Struct {
+		return
+	}
 	if _, exists := (*seen)[objType]; exists {
 		return
 	}
 	(*seen)[objType] = true
 	if !strings.Contains(objType.PkgPath(), "github.com/openshift/origin/pkg") {
+		return
+	}
+
+	if objType.Kind() != reflect.Struct {
 		return
 	}
 

@@ -42,7 +42,7 @@ func TestNamespaceEdgeMatching(t *testing.T) {
 
 		p := &kapps.StatefulSet{}
 		p.Namespace = namespace
-		p.Name = "the-petset"
+		p.Name = "the-statefulset"
 		p.Spec.Selector = &unversioned.LabelSelector{
 			MatchLabels: map[string]string{"a": "1"},
 		}
@@ -179,8 +179,9 @@ func TestHPADCEdges(t *testing.T) {
 	hpa.Name = "test-hpa"
 	hpa.Spec = autoscaling.HorizontalPodAutoscalerSpec{
 		ScaleTargetRef: autoscaling.CrossVersionObjectReference{
-			Name: "test-dc",
-			Kind: "DeploymentConfig",
+			Name:       "test-dc",
+			Kind:       "DeploymentConfig",
+			APIVersion: "apps.openshift.io/v1",
 		},
 	}
 

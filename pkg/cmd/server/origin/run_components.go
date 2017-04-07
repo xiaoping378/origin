@@ -30,6 +30,7 @@ import (
 	builddefaults "github.com/openshift/origin/pkg/build/admission/defaults"
 	buildoverrides "github.com/openshift/origin/pkg/build/admission/overrides"
 	buildclient "github.com/openshift/origin/pkg/build/client"
+	buildpodcontroller "github.com/openshift/origin/pkg/build/controller/buildpod"
 	buildcontrollerfactory "github.com/openshift/origin/pkg/build/controller/factory"
 	buildstrategy "github.com/openshift/origin/pkg/build/controller/strategy"
 	osclient "github.com/openshift/origin/pkg/client"
@@ -58,6 +59,7 @@ import (
 	"github.com/openshift/origin/pkg/service/controller/ingressip"
 	servingcertcontroller "github.com/openshift/origin/pkg/service/controller/servingcert"
 	serviceaccountcontrollers "github.com/openshift/origin/pkg/serviceaccounts/controllers"
+	templatecontroller "github.com/openshift/origin/pkg/template/controller"
 	unidlingcontroller "github.com/openshift/origin/pkg/unidling/controller"
 )
 
@@ -288,16 +290,12 @@ func (c *MasterConfig) RunBuildController(informers shared.InformerFactory) erro
 
 // RunBuildPodController starts the build/pod status sync loop for build status
 func (c *MasterConfig) RunBuildPodController() {
+	buildInfomer := c.Informers.Builds().Informer()
+	podInformer := c.Informers.KubernetesInformers().Pods().Informer()
 	osclient, kclient := c.BuildPodControllerClients()
-	factory := buildcontrollerfactory.BuildPodControllerFactory{
-		OSClient:     osclient,
-		KubeClient:   kclient,
-		BuildUpdater: buildclient.NewOSClientBuildClient(osclient),
-	}
-	controller := factory.Create()
-	controller.Run()
-	deletecontroller := factory.CreateDeleteController()
-	deletecontroller.Run()
+
+	controller := buildpodcontroller.NewBuildPodController(buildInfomer, podInformer, kclient, osclient)
+	go controller.Run(5, utilwait.NeverStop)
 }
 
 // RunBuildImageChangeTriggerController starts the build image change trigger controller process.
@@ -403,13 +401,21 @@ func (c *MasterConfig) RunServiceServingCertController(client *kclientset.Client
 // RunImageImportController starts the image import trigger controller process.
 func (c *MasterConfig) RunImageImportController() {
 	osclient := c.ImageImportControllerClient()
-	importRate := float32(c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute) / float32(time.Minute/time.Second)
-	importBurst := c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute * 2
+
+	var limiter flowcontrol.RateLimiter = nil
+	if c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute <= 0 {
+		limiter = flowcontrol.NewFakeAlwaysRateLimiter()
+	} else {
+		importRate := float32(c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute) / float32(time.Minute/time.Second)
+		importBurst := c.Options.ImagePolicyConfig.MaxScheduledImageImportsPerMinute * 2
+		limiter = flowcontrol.NewTokenBucketRateLimiter(importRate, importBurst)
+	}
+
 	factory := imagecontroller.ImportControllerFactory{
 		Client:               osclient,
 		ResyncInterval:       10 * time.Minute,
 		MinimumCheckInterval: time.Duration(c.Options.ImagePolicyConfig.ScheduledImageImportMinimumIntervalSeconds) * time.Second,
-		ImportRateLimiter:    flowcontrol.NewTokenBucketRateLimiter(importRate, importBurst),
+		ImportRateLimiter:    limiter,
 		ScheduleEnabled:      !c.Options.ImagePolicyConfig.DisableScheduledImport,
 	}
 	controller, scheduledController := factory.Create()
@@ -495,13 +501,13 @@ func (c *MasterConfig) RunResourceQuotaManager(cm *cmapp.CMServer) {
 	}
 
 	osClient, kClient := c.ResourceQuotaManagerClients()
-	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(osClient, kClient, c.Informers.KubernetesInformers())
+	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(c.Informers, osClient, kClient)
 	resourceQuotaControllerOptions := &kresourcequota.ResourceQuotaControllerOptions{
 		KubeClient:                kClient,
 		ResyncPeriod:              controller.StaticResyncPeriodFunc(resourceQuotaSyncPeriod),
 		Registry:                  resourceQuotaRegistry,
 		GroupKindsToReplenish:     quota.AllEvaluatedGroupKinds,
-		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers.KubernetesInformers(), osClient, kClient),
+		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient, kClient),
 		ReplenishmentResyncPeriod: replenishmentSyncPeriodFunc,
 	}
 	go kresourcequota.NewResourceQuotaController(resourceQuotaControllerOptions).Run(concurrentResourceQuotaSyncs, utilwait.NeverStop)
@@ -517,7 +523,7 @@ func (c *MasterConfig) RunClusterQuotaMappingController() {
 
 func (c *MasterConfig) RunClusterQuotaReconciliationController() {
 	osClient, kClient := c.ResourceQuotaManagerClients()
-	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(osClient, kClient, c.Informers.KubernetesInformers())
+	resourceQuotaRegistry := quota.NewAllResourceQuotaRegistry(c.Informers, osClient, kClient)
 	groupKindsToReplenish := quota.AllEvaluatedGroupKinds
 
 	options := clusterquotareconciliation.ClusterQuotaReconcilationControllerOptions{
@@ -527,7 +533,7 @@ func (c *MasterConfig) RunClusterQuotaReconciliationController() {
 
 		Registry:                  resourceQuotaRegistry,
 		ResyncPeriod:              defaultResourceQuotaSyncPeriod,
-		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers.KubernetesInformers(), osClient, kClient),
+		ControllerFactory:         quotacontroller.NewAllResourceReplenishmentControllerFactory(c.Informers, osClient, kClient),
 		ReplenishmentResyncPeriod: controller.StaticResyncPeriodFunc(defaultReplenishmentSyncPeriod),
 		GroupKindsToReplenish:     groupKindsToReplenish,
 	}
@@ -563,4 +569,8 @@ func (c *MasterConfig) RunUnidlingController() {
 	cont := unidlingcontroller.NewUnidlingController(scaleNamespacer, kc.Core(), kc.Core(), dcCoreClient, kc.Core(), resyncPeriod)
 
 	cont.Run(utilwait.NeverStop)
+}
+
+func (c *MasterConfig) RunTemplateController() {
+	go templatecontroller.NewTemplateInstanceController(c.PrivilegedLoopbackClientConfig).Run(utilwait.NeverStop)
 }

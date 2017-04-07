@@ -44,6 +44,8 @@ function generate_global_config() {
 
 #
 #  Generate VRRP checker script configuration section.
+#    When a check script is provided use it instead of default script
+#    The default script is suppressed When port is 0
 #
 #  Example:
 #      generate_script_config
@@ -56,13 +58,14 @@ function generate_script_config() {
   echo ""
   echo "vrrp_script ${CHECK_SCRIPT_NAME} {"
 
-  if [[ "${port}" == "0" ]]; then
-    echo "   script \"true\""
+  if [[ -n "${HA_CHECK_SCRIPT}" ]]; then
+    echo "   script \"${HA_CHECK_SCRIPT}\""
   else
-    if [[ -n "${HA_CHECK_SCRIPT}" ]]; then
-      echo "   script \"${HA_CHECK_SCRIPT}\""
+    if [[ "${port}" == "0" ]]; then
+      echo "   script \"true\""
+    else
+      echo "   script \"</dev/tcp/${serviceip}/${port}\""
     fi
-    echo "   script \"</dev/tcp/${serviceip}/${port}\""
   fi
 
   echo "   interval ${CHECK_INTERVAL_SECS}"
@@ -165,8 +168,6 @@ function generate_vip_section() {
 
 #
 #  Generate vrrpd instance configuration section.
-#    This generates the vrrp_sync_group and vrrp_instance
-#    There is one VIP per vrrp_sync_group
 #
 #  Examples:
 #      generate_vrrpd_instance_config arp 1 "10.1.2.3" enp0s8 "252" "master"
@@ -177,7 +178,7 @@ function generate_vip_section() {
 #
 function generate_vrrpd_instance_config() {
   local servicename=$1
-  local iid=${2:-"0"}
+  local iid=${2:-"1"}
   local vips=$3
   local interface=$4
   local priority=${5:-"10"}
@@ -227,14 +228,6 @@ function generate_failover_config() {
   local interface ; interface=$(get_network_device "${NETWORK_INTERFACE}")
   local ipaddr ; ipaddr=$(get_device_ip_address "${interface}")
   local port="${HA_MONITOR_PORT//[^0-9]/}"
-
-  # scripts may not have execute set
-  if [[ -n "${HA_CHECK_SCRIPT}" ]]; then
-    chmod +x "${HA_CHECK_SCRIPT}"
-  fi
-  if [[ -n "${HA_NOTIFY_SCRIPT}" ]]; then
-    chmod +x "${HA_NOTIFY_SCRIPT}"
-  fi
 
   echo "! Configuration File for keepalived
 

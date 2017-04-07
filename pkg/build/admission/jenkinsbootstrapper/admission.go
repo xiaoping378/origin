@@ -3,7 +3,6 @@ package jenkinsbootstrapper
 import (
 	"fmt"
 	"io"
-	"net/http"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/admission"
@@ -64,7 +63,8 @@ func (a *jenkinsBootstrapper) Admit(attributes admission.Attributes) error {
 	if len(attributes.GetSubresource()) != 0 {
 		return nil
 	}
-	if attributes.GetResource().GroupResource() != buildapi.Resource("buildconfigs") && attributes.GetResource().GroupResource() != buildapi.Resource("builds") {
+	gr := attributes.GetResource().GroupResource()
+	if !buildapi.IsResourceOrLegacy("buildconfigs", gr) && !buildapi.IsResourceOrLegacy("builds", gr) {
 		return nil
 	}
 	if !needsJenkinsTemplate(attributes.GetObject()) {
@@ -94,11 +94,7 @@ func (a *jenkinsBootstrapper) Admit(attributes admission.Attributes) error {
 		return fmt.Errorf("template %s/%s does not contain required service %q", a.jenkinsConfig.TemplateNamespace, a.jenkinsConfig.TemplateName, a.jenkinsConfig.ServiceName)
 	}
 
-	impersonatingConfig := a.privilegedRESTClientConfig
-	oldWrapTransport := impersonatingConfig.WrapTransport
-	impersonatingConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-		return authenticationclient.NewImpersonatingRoundTripper(attributes.GetUserInfo(), oldWrapTransport(rt))
-	}
+	impersonatingConfig := authenticationclient.NewImpersonatingConfig(attributes.GetUserInfo(), a.privilegedRESTClientConfig)
 
 	var bulkErr error
 
@@ -181,4 +177,11 @@ func (a *jenkinsBootstrapper) SetRESTClientConfig(restClientConfig restclient.Co
 
 func (a *jenkinsBootstrapper) SetOpenshiftClient(oclient client.Interface) {
 	a.openshiftClient = oclient
+}
+
+func (a *jenkinsBootstrapper) Validate() error {
+	if a.openshiftClient == nil {
+		return fmt.Errorf("missing openshiftClient")
+	}
+	return nil
 }

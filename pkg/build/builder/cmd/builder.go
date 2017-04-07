@@ -24,7 +24,6 @@ import (
 	bld "github.com/openshift/origin/pkg/build/builder"
 	"github.com/openshift/origin/pkg/build/builder/cmd/scmauth"
 	"github.com/openshift/origin/pkg/client"
-	dockerutil "github.com/openshift/origin/pkg/cmd/util/docker"
 	"github.com/openshift/origin/pkg/generate/git"
 	"github.com/openshift/origin/pkg/version"
 )
@@ -73,7 +72,7 @@ func newBuilderConfigFromEnvironment(out io.Writer) (*builderConfig, error) {
 
 	// dockerClient and dockerEndpoint (DOCKER_HOST)
 	// usually not set, defaults to docker socket
-	cfg.dockerClient, cfg.dockerEndpoint, err = dockerutil.NewHelper().GetClient()
+	cfg.dockerClient, cfg.dockerEndpoint, err = bld.GetDockerClient()
 	if err != nil {
 		return nil, fmt.Errorf("no Docker configuration defined: %v", err)
 	}
@@ -124,7 +123,6 @@ func (c *builderConfig) setupGitEnvironment() (string, []string, error) {
 			return sourceSecretDir, nil, fmt.Errorf("cannot setup source secret: %v", err)
 		}
 		if overrideURL != nil {
-			c.build.Annotations[bld.OriginalSourceURLAnnotationKey] = gitSource.URI
 			gitSource.URI = overrideURL.String()
 		}
 		gitEnv = append(gitEnv, secretsEnv...)

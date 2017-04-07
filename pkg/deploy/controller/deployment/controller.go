@@ -20,6 +20,22 @@ import (
 	"github.com/openshift/origin/pkg/util"
 )
 
+// maxRetryCount is the maximum number of times the controller will retry errors.
+// The first requeue is after 5ms and subsequent requeues grow exponentially.
+// This effectively can extend up to 5*2^14ms which caps to 82s:
+//
+// 5ms, 10ms, 20ms, 40ms, 80ms, 160ms, 320ms, 640ms, 1.3s, 2.6s, 5.1s, 10.2s, 20.4s, 41s, 82s
+//
+//
+// The most common errors are:
+//
+// * failure to delete the deployer pods
+// * failure to update the replication controller
+// * pod may be missing from the cache once the deployment transitions to Pending.
+//
+// In most cases, we shouldn't need to retry up to maxRetryCount...
+const maxRetryCount = 15
+
 // fatalError is an error which can't be retried.
 type fatalError string
 
@@ -71,10 +87,10 @@ type DeploymentController struct {
 	recorder record.EventRecorder
 }
 
-// Handle processes deployment and either creates a deployer pod or responds
+// handle processes a deployment and either creates a deployer pod or responds
 // to a terminal deployment status. Since this controller started using caches,
 // the provided rc MUST be deep-copied beforehand (see work() in factory.go).
-func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) error {
+func (c *DeploymentController) handle(deployment *kapi.ReplicationController, willBeDropped bool) error {
 	// Copy all the annotations from the deployment.
 	updatedAnnotations := make(map[string]string)
 	for key, value := range deployment.Annotations {
@@ -127,6 +143,7 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			nextStatus = deployapi.DeploymentStatusPending
 			glog.V(4).Infof("Created deployer pod %s for deployment %s", deploymentPod.Name, deployutil.LabelForDeployment(deployment))
 
+		// Most likely dead code since we never get an error different from 404 back from the cache.
 		case deployerErr != nil:
 			// If the pod already exists, it's possible that a previous CreatePod
 			// succeeded but the deployment state update failed and now we're re-
@@ -163,6 +180,11 @@ func (c *DeploymentController) Handle(deployment *kapi.ReplicationController) er
 			// If the deployment is cancelled here then we deleted the deployer in a previous
 			// resync of the deployment.
 			if !deployutil.IsDeploymentCancelled(deployment) {
+				// Retry more before setting the deployment to Failed if it's Pending - the pod might not have
+				// appeared in the cache yet.
+				if !willBeDropped && currentStatus == deployapi.DeploymentStatusPending {
+					return deployerErr
+				}
 				updatedAnnotations[deployapi.DeploymentStatusReasonAnnotation] = deployapi.DeploymentFailedDeployerPodNoLongerExists
 				c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "Failed", fmt.Sprintf("Deployer pod %q has gone missing", deployerPodName))
 				deployerErr = fmt.Errorf("Failing deployment %q because its deployer pod %q disappeared", deployutil.LabelForDeployment(deployment), deployerPodName)
@@ -302,6 +324,17 @@ func (c *DeploymentController) makeDeployerPod(deployment *kapi.ReplicationContr
 			Labels: map[string]string{
 				deployapi.DeployerPodForDeploymentLabel: deployment.Name,
 			},
+			// Set the owner reference to current deployment, so in case the deployment fails
+			// and the deployer pod is preserved when a revisionHistory limit is reached and the
+			// deployment is removed, we also remove the deployer pod with it.
+			OwnerReferences: []kapi.OwnerReference{{
+				// FIXME: This will have to point to apps.openshift.io/v1 after we switch to
+				// clientsets.
+				APIVersion: "v1",
+				Kind:       deployapi.Kind("DeploymentConfig").Kind,
+				Name:       deployment.Name,
+				UID:        deployment.UID,
+			}},
 		},
 		Spec: kapi.PodSpec{
 			Containers: []kapi.Container{
@@ -423,13 +456,15 @@ func (c *DeploymentController) handleErr(err error, key interface{}, deployment 
 		return
 	}
 
-	if c.queue.NumRequeues(key) < 2 {
+	if c.queue.NumRequeues(key) < maxRetryCount {
 		c.queue.AddRateLimited(key)
 		return
 	}
 
+	msg := fmt.Sprintf("About to stop retrying %q: %v", deployment.Name, err)
 	if _, isActionableErr := err.(actionableError); isActionableErr {
-		c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedRetry", fmt.Sprintf("About to stop retrying %s: %v", deployment.Name, err))
+		c.emitDeploymentEvent(deployment, kapi.EventTypeWarning, "FailedRetry", msg)
 	}
+	glog.V(2).Infof(msg)
 	c.queue.Forget(key)
 }

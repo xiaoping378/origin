@@ -6872,6 +6872,53 @@
     "operations": [
      {
       "type": "v1.DeploymentConfig",
+      "method": "GET",
+      "summary": "read status of the specified DeploymentConfig",
+      "nickname": "readNamespacedDeploymentConfigStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the DeploymentConfig",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.DeploymentConfig"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     },
+     {
+      "type": "v1.DeploymentConfig",
       "method": "PUT",
       "summary": "replace status of the specified DeploymentConfig",
       "nickname": "replaceNamespacedDeploymentConfigStatus",
@@ -6923,6 +6970,63 @@
       ],
       "consumes": [
        "*/*"
+      ]
+     },
+     {
+      "type": "v1.DeploymentConfig",
+      "method": "PATCH",
+      "summary": "partially update status of the specified DeploymentConfig",
+      "nickname": "patchNamespacedDeploymentConfigStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "unversioned.Patch",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the DeploymentConfig",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.DeploymentConfig"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "application/json-patch+json",
+       "application/merge-patch+json",
+       "application/strategic-merge-patch+json"
       ]
      }
     ]
@@ -11406,6 +11510,53 @@
     "operations": [
      {
       "type": "v1.ImageStream",
+      "method": "GET",
+      "summary": "read status of the specified ImageStream",
+      "nickname": "readNamespacedImageStreamStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the ImageStream",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.ImageStream"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     },
+     {
+      "type": "v1.ImageStream",
       "method": "PUT",
       "summary": "replace status of the specified ImageStream",
       "nickname": "replaceNamespacedImageStreamStatus",
@@ -11457,6 +11608,63 @@
       ],
       "consumes": [
        "*/*"
+      ]
+     },
+     {
+      "type": "v1.ImageStream",
+      "method": "PATCH",
+      "summary": "partially update status of the specified ImageStream",
+      "nickname": "patchNamespacedImageStreamStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "unversioned.Patch",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the ImageStream",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.ImageStream"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "application/json-patch+json",
+       "application/merge-patch+json",
+       "application/strategic-merge-patch+json"
       ]
      }
     ]
@@ -20426,6 +20634,53 @@
     "operations": [
      {
       "type": "v1.Route",
+      "method": "GET",
+      "summary": "read status of the specified Route",
+      "nickname": "readNamespacedRouteStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the Route",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.Route"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     },
+     {
+      "type": "v1.Route",
       "method": "PUT",
       "summary": "replace status of the specified Route",
       "nickname": "replaceNamespacedRouteStatus",
@@ -20477,6 +20732,63 @@
       ],
       "consumes": [
        "*/*"
+      ]
+     },
+     {
+      "type": "v1.Route",
+      "method": "PATCH",
+      "summary": "partially update status of the specified Route",
+      "nickname": "patchNamespacedRouteStatus",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "unversioned.Patch",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the Route",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1.Route"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "application/json-patch+json",
+       "application/merge-patch+json",
+       "application/strategic-merge-patch+json"
       ]
      }
     ]
@@ -22913,6 +23225,14 @@
      "imageChange": {
       "$ref": "v1.ImageChangeTrigger",
       "description": "imageChange contains parameters for an ImageChange type of trigger"
+     },
+     "gitlab": {
+      "$ref": "v1.WebHookTrigger",
+      "description": "GitLabWebHook contains the parameters for a GitLab webhook type of trigger"
+     },
+     "bitbucket": {
+      "$ref": "v1.WebHookTrigger",
+      "description": "BitbucketWebHook contains the parameters for a Bitbucket webhook type of trigger"
      }
     }
    },
@@ -23237,7 +23557,7 @@
       "items": {
        "$ref": "v1.EnvVar"
       },
-      "description": "env contains additional environment variables you want to pass into a builder container"
+      "description": "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported."
      },
      "forcePull": {
       "type": "boolean",
@@ -23246,6 +23566,17 @@
      "dockerfilePath": {
       "type": "string",
       "description": "dockerfilePath is the path of the Dockerfile that will be used to build the Docker image, relative to the root of the context (contextDir)."
+     },
+     "buildArgs": {
+      "type": "array",
+      "items": {
+       "$ref": "v1.EnvVar"
+      },
+      "description": "buildArgs contains build arguments that will be resolved in the Dockerfile.  See https://docs.docker.com/engine/reference/builder/#/arg for more details."
+     },
+     "imageOptimizationPolicy": {
+      "$ref": "v1.ImageOptimizationPolicy",
+      "description": "imageOptimizationPolicy describes what optimizations the system can use when building images to reduce the final size or time spent building the image. The default policy is 'None' which means the final build image will be equivalent to an image created by the Docker build API. The experimental policy 'SkipLayers' will avoid commiting new layers in between each image step, and will fail if the Dockerfile cannot provide compatibility with the 'None' policy. An additional experimental policy 'SkipLayersAndWarn' is the same as 'SkipLayers' but simply warns if compatibility cannot be preserved."
      }
     }
    },
@@ -23364,6 +23695,10 @@
      }
     }
    },
+   "v1.ImageOptimizationPolicy": {
+    "id": "v1.ImageOptimizationPolicy",
+    "properties": {}
+   },
    "v1.SourceBuildStrategy": {
     "id": "v1.SourceBuildStrategy",
     "description": "SourceBuildStrategy defines input parameters specific to an Source build.",
@@ -23384,7 +23719,7 @@
       "items": {
        "$ref": "v1.EnvVar"
       },
-      "description": "env contains additional environment variables you want to pass into a builder container"
+      "description": "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported."
      },
      "scripts": {
       "type": "string",
@@ -23400,14 +23735,14 @@
      },
      "runtimeImage": {
       "$ref": "v1.ObjectReference",
-      "description": "runtimeImage is an optional image that is used to run an application without unneeded dependencies installed. The building of the application is still done in the builder image but, post build, you can copy the needed artifacts in the runtime image for use. This field and the feature it enables are in tech preview."
+      "description": "runtimeImage is an optional image that is used to run an application without unneeded dependencies installed. The building of the application is still done in the builder image but, post build, you can copy the needed artifacts in the runtime image for use. Deprecated: This feature will be removed in a future release. Use ImageSource to copy binary artifacts created from one build into a separate runtime image."
      },
      "runtimeArtifacts": {
       "type": "array",
       "items": {
        "$ref": "v1.ImageSourcePath"
       },
-      "description": "runtimeArtifacts specifies a list of source/destination pairs that will be copied from the builder to the runtime image. sourcePath can be a file or directory. destinationDir must be a directory. destinationDir can also be empty or equal to \".\", in this case it just refers to the root of WORKDIR. This field and the feature it enables are in tech preview."
+      "description": "runtimeArtifacts specifies a list of source/destination pairs that will be copied from the builder to the runtime image. sourcePath can be a file or directory. destinationDir must be a directory. destinationDir can also be empty or equal to \".\", in this case it just refers to the root of WORKDIR. Deprecated: This feature will be removed in a future release. Use ImageSource to copy binary artifacts created from one build into a separate runtime image."
      }
     }
    },
@@ -23431,7 +23766,7 @@
       "items": {
        "$ref": "v1.EnvVar"
       },
-      "description": "env contains additional environment variables you want to pass into a builder container"
+      "description": "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported."
      },
      "exposeDockerSocket": {
       "type": "boolean",
@@ -23483,6 +23818,13 @@
      "jenkinsfile": {
       "type": "string",
       "description": "Jenkinsfile defines the optional raw contents of a Jenkinsfile which defines a Jenkins pipeline build."
+     },
+     "env": {
+      "type": "array",
+      "items": {
+       "$ref": "v1.EnvVar"
+      },
+      "description": "env contains additional environment variables you want to pass into a build pipeline. ValueFrom is not supported."
      }
     }
    },
@@ -23769,7 +24111,7 @@
       "items": {
        "$ref": "v1.EnvVar"
       },
-      "description": "env contains additional environment variables you want to pass into a builder container"
+      "description": "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported."
      },
      "triggeredBy": {
       "type": "array",
@@ -23777,6 +24119,10 @@
        "$ref": "v1.BuildTriggerCause"
       },
       "description": "triggeredBy describes which triggers started the most recent update to the build configuration and contains information about those triggers."
+     },
+     "dockerStrategyOptions": {
+      "$ref": "v1.DockerStrategyOptions",
+      "description": "DockerStrategyOptions contains additional docker-strategy specific options for the build"
      }
     }
    },
@@ -23799,6 +24145,14 @@
      "imageChangeBuild": {
       "$ref": "v1.ImageChangeCause",
       "description": "imageChangeBuild stores information about an imagechange event that triggered a new build."
+     },
+     "gitlabWebHook": {
+      "$ref": "v1.GitLabWebHookCause",
+      "description": "GitLabWebHook represents data for a GitLab webhook that fired a specific build."
+     },
+     "bitbucketWebHook": {
+      "$ref": "v1.BitbucketWebHookCause",
+      "description": "BitbucketWebHook represents data for a Bitbucket webhook that fired a specific build."
      }
     }
    },
@@ -23841,6 +24195,47 @@
      "fromRef": {
       "$ref": "v1.ObjectReference",
       "description": "fromRef contains detailed information about an image that triggered a build."
+     }
+    }
+   },
+   "v1.GitLabWebHookCause": {
+    "id": "v1.GitLabWebHookCause",
+    "description": "GitLabWebHookCause has information about a GitLab webhook that triggered a build.",
+    "properties": {
+     "revision": {
+      "$ref": "v1.SourceRevision",
+      "description": "Revision is the git source revision information of the trigger."
+     },
+     "secret": {
+      "type": "string",
+      "description": "Secret is the obfuscated webhook secret that triggered a build."
+     }
+    }
+   },
+   "v1.BitbucketWebHookCause": {
+    "id": "v1.BitbucketWebHookCause",
+    "description": "BitbucketWebHookCause has information about a Bitbucket webhook that triggered a build.",
+    "properties": {
+     "revision": {
+      "$ref": "v1.SourceRevision",
+      "description": "Revision is the git source revision information of the trigger."
+     },
+     "secret": {
+      "type": "string",
+      "description": "Secret is the obfuscated webhook secret that triggered a build."
+     }
+    }
+   },
+   "v1.DockerStrategyOptions": {
+    "id": "v1.DockerStrategyOptions",
+    "description": "DockerStrategyOptions contains extra strategy options for Docker builds",
+    "properties": {
+     "buildArgs": {
+      "type": "array",
+      "items": {
+       "$ref": "v1.EnvVar"
+      },
+      "description": "Args contains any build arguments that are to be passed to Docker.  See https://docs.docker.com/engine/reference/builder/#/arg for more details"
      }
     }
    },
@@ -23995,6 +24390,30 @@
      "config": {
       "$ref": "v1.ObjectReference",
       "description": "config is an ObjectReference to the BuildConfig this Build is based on."
+     },
+     "output": {
+      "$ref": "v1.BuildStatusOutput",
+      "description": "output describes the Docker image the build has produced."
+     }
+    }
+   },
+   "v1.BuildStatusOutput": {
+    "id": "v1.BuildStatusOutput",
+    "description": "BuildStatusOutput contains the status of the built image.",
+    "properties": {
+     "to": {
+      "$ref": "v1.BuildStatusOutputTo",
+      "description": "to describes the status of the built image being pushed to a registry."
+     }
+    }
+   },
+   "v1.BuildStatusOutputTo": {
+    "id": "v1.BuildStatusOutputTo",
+    "description": "BuildStatusOutputTo describes the status of the built image with regards to image registry to which it was supposed to be pushed.",
+    "properties": {
+     "imageDigest": {
+      "type": "string",
+      "description": "imageDigest is the digest of the built Docker image. The digest uniquely identifies the image in the registry to which it was pushed.\n\nPlease note that this field may not always be set even if the push completes successfully - e.g. when the registry returns no digest or returns it in a format that the builder doesn't understand."
      }
     }
    },
@@ -26223,6 +26642,11 @@
        "$ref": "v1.DeploymentCondition"
       },
       "description": "Conditions represents the latest available observations of a deployment config's current state."
+     },
+     "readyReplicas": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Total number of ready pods targeted by this deployment."
      }
     }
    },
@@ -26621,7 +27045,7 @@
      },
      "host": {
       "type": "string",
-      "description": "Host is the name of the node. (This is redundant with the object's name, and this field is not actually used any more.)"
+      "description": "Host is the name of the node. (This is the same as the object's name, but both fields must be set.)"
      },
      "hostIP": {
       "type": "string",
@@ -27038,6 +27462,10 @@
       "$ref": "v1.TagImportPolicy",
       "description": "ImportPolicy is the policy controlling how the image is imported"
      },
+     "referencePolicy": {
+      "$ref": "v1.TagReferencePolicy",
+      "description": "ReferencePolicy defines how other components should consume the image"
+     },
      "includeManifest": {
       "type": "boolean",
       "description": "IncludeManifest determines if the manifest for each image is returned in the response"
@@ -27055,6 +27483,19 @@
      "scheduled": {
       "type": "boolean",
       "description": "Scheduled indicates to the server that this tag should be periodically checked to ensure it is up to date, and imported"
+     }
+    }
+   },
+   "v1.TagReferencePolicy": {
+    "id": "v1.TagReferencePolicy",
+    "description": "TagReferencePolicy describes how pull-specs for images in this image stream tag are generated when image change triggers in deployment configs or builds are resolved. This allows the image stream author to control how images are accessed.",
+    "required": [
+     "type"
+    ],
+    "properties": {
+     "type": {
+      "type": "string",
+      "description": "Type determines how the image pull spec should be transformed when the image stream tag is used in deployment config triggers or new builds. The default value is `Source`, indicating the original location of the image should be used (if imported). The user may also specify `Local`, indicating that the pull spec should point to the integrated Docker registry and leverage the registry's ability to proxy the pull to an upstream registry. `Local` allows the credentials used to pull this image to be managed from the image stream's namespace, so others on the platform can access a remote image but have no access to the remote secret. It also allows the image layers to be mirrored into the local registry which the images can still be pulled even if the upstream registry is unavailable."
      }
     }
    },
@@ -27076,6 +27517,10 @@
      "importPolicy": {
       "$ref": "v1.TagImportPolicy",
       "description": "ImportPolicy is the policy controlling how the image is imported"
+     },
+     "referencePolicy": {
+      "$ref": "v1.TagReferencePolicy",
+      "description": "ReferencePolicy defines how other components should consume the image"
      },
      "includeManifest": {
       "type": "boolean",
@@ -27187,19 +27632,6 @@
      "referencePolicy": {
       "$ref": "v1.TagReferencePolicy",
       "description": "ReferencePolicy defines how other components should consume the image"
-     }
-    }
-   },
-   "v1.TagReferencePolicy": {
-    "id": "v1.TagReferencePolicy",
-    "description": "TagReferencePolicy describes how pull-specs for images in this image stream tag are generated when image change triggers in deployment configs or builds are resolved. This allows the image stream author to control how images are accessed.",
-    "required": [
-     "type"
-    ],
-    "properties": {
-     "type": {
-      "type": "string",
-      "description": "Type determines how the image pull spec should be transformed when the image stream tag is used in deployment config triggers or new builds. The default value is `Source`, indicating the original location of the image should be used (if imported). The user may also specify `Local`, indicating that the pull spec should point to the integrated Docker registry and leverage the registry's ability to proxy the pull to an upstream registry. `Local` allows the credentials used to pull this image to be managed from the image stream's namespace, so others on the platform can access a remote image but have no access to the remote secret. It also allows the image layers to be mirrored into the local registry which the images can still be pulled even if the upstream registry is unavailable."
      }
     }
    },
@@ -27557,7 +27989,9 @@
      "resourceAPIGroup",
      "resourceAPIVersion",
      "resource",
-     "resourceName"
+     "resourceName",
+     "path",
+     "isNonResourceURL"
     ],
     "properties": {
      "kind": {
@@ -27592,6 +28026,14 @@
       "type": "string",
       "description": "ResourceName is the name of the resource being requested for a \"get\" or deleted for a \"delete\""
      },
+     "path": {
+      "type": "string",
+      "description": "Path is the path of a non resource URL"
+     },
+     "isNonResourceURL": {
+      "type": "boolean",
+      "description": "IsNonResourceURL is true if this is a request for a non-resource URL (outside of the resource hieraarchy)"
+     },
      "content": {
       "type": "string",
       "description": "Content is the actual content of the request for create and update"
@@ -27608,6 +28050,8 @@
      "resourceAPIVersion",
      "resource",
      "resourceName",
+     "path",
+     "isNonResourceURL",
      "user",
      "groups",
      "scopes"
@@ -27644,6 +28088,14 @@
      "resourceName": {
       "type": "string",
       "description": "ResourceName is the name of the resource being requested for a \"get\" or deleted for a \"delete\""
+     },
+     "path": {
+      "type": "string",
+      "description": "Path is the path of a non resource URL"
+     },
+     "isNonResourceURL": {
+      "type": "boolean",
+      "description": "IsNonResourceURL is true if this is a request for a non-resource URL (outside of the resource hieraarchy)"
      },
      "content": {
       "type": "string",
@@ -28544,7 +28996,7 @@
       "items": {
        "$ref": "runtime.RawExtension"
       },
-      "description": "objects is an array of resources to include in this template."
+      "description": "objects is an array of resources to include in this template. If a namespace value is hardcoded in the object, it will be removed during template instantiation, however if the namespace value is, or contains, a ${PARAMETER_REFERENCE}, the resolved value after parameter substitution will be respected and the object will be created in that namespace."
      },
      "parameters": {
       "type": "array",
@@ -28717,7 +29169,9 @@
      "resourceAPIGroup",
      "resourceAPIVersion",
      "resource",
-     "resourceName"
+     "resourceName",
+     "path",
+     "isNonResourceURL"
     ],
     "properties": {
      "kind": {
@@ -28751,6 +29205,14 @@
      "resourceName": {
       "type": "string",
       "description": "ResourceName is the name of the resource being requested for a \"get\" or deleted for a \"delete\""
+     },
+     "path": {
+      "type": "string",
+      "description": "Path is the path of a non resource URL"
+     },
+     "isNonResourceURL": {
+      "type": "boolean",
+      "description": "IsNonResourceURL is true if this is a request for a non-resource URL (outside of the resource hieraarchy)"
      },
      "content": {
       "type": "string",
@@ -29196,6 +29658,10 @@
      "wildcardPolicy": {
       "type": "string",
       "description": "Wildcard policy is the wildcard policy that was allowed where this route is exposed."
+     },
+     "routerCanonicalHostname": {
+      "type": "string",
+      "description": "CanonicalHostname is the external host name for the router that can be used as a CNAME for the host requested for this route. This value is optional and may not be set in all cases."
      }
     }
    },
@@ -29300,6 +29766,8 @@
      "resourceAPIVersion",
      "resource",
      "resourceName",
+     "path",
+     "isNonResourceURL",
      "user",
      "groups",
      "scopes"
@@ -29336,6 +29804,14 @@
      "resourceName": {
       "type": "string",
       "description": "ResourceName is the name of the resource being requested for a \"get\" or deleted for a \"delete\""
+     },
+     "path": {
+      "type": "string",
+      "description": "Path is the path of a non resource URL"
+     },
+     "isNonResourceURL": {
+      "type": "boolean",
+      "description": "IsNonResourceURL is true if this is a request for a non-resource URL (outside of the resource hieraarchy)"
      },
      "content": {
       "type": "string",
@@ -29533,7 +30009,7 @@
       "items": {
        "type": "string"
       },
-      "description": "Groups are the groups that this user is a member of"
+      "description": "Groups specifies group names this user is a member of. This field is deprecated and will be removed in a future release. Instead, create a Group object containing the name of this User."
      }
     }
    },

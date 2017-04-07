@@ -30,6 +30,14 @@ func (BinaryBuildSource) SwaggerDoc() map[string]string {
 	return map_BinaryBuildSource
 }
 
+var map_BitbucketWebHookCause = map[string]string{
+	"": "BitbucketWebHookCause has information about a Bitbucket webhook that triggered a build.",
+}
+
+func (BitbucketWebHookCause) SwaggerDoc() map[string]string {
+	return map_BitbucketWebHookCause
+}
+
 var map_Build = map[string]string{
 	"":         "Build encapsulates the inputs needed to produce a new deployable image, as well as the status of the execution and a reference to the Pod which executed the build.",
 	"metadata": "Standard object's metadata.",
@@ -140,15 +148,16 @@ func (BuildPostCommitSpec) SwaggerDoc() map[string]string {
 }
 
 var map_BuildRequest = map[string]string{
-	"":                 "BuildRequest is the resource used to pass parameters to build generator",
-	"metadata":         "metadata for BuildRequest.",
-	"revision":         "revision is the information from the source for a specific repo snapshot.",
-	"triggeredByImage": "triggeredByImage is the Image that triggered this build.",
-	"from":             "from is the reference to the ImageStreamTag that triggered the build.",
-	"binary":           "binary indicates a request to build from a binary provided to the builder",
-	"lastVersion":      "lastVersion (optional) is the LastVersion of the BuildConfig that was used to generate the build. If the BuildConfig in the generator doesn't match, a build will not be generated.",
-	"env":              "env contains additional environment variables you want to pass into a builder container",
-	"triggeredBy":      "triggeredBy describes which triggers started the most recent update to the build configuration and contains information about those triggers.",
+	"":                      "BuildRequest is the resource used to pass parameters to build generator",
+	"metadata":              "metadata for BuildRequest.",
+	"revision":              "revision is the information from the source for a specific repo snapshot.",
+	"triggeredByImage":      "triggeredByImage is the Image that triggered this build.",
+	"from":                  "from is the reference to the ImageStreamTag that triggered the build.",
+	"binary":                "binary indicates a request to build from a binary provided to the builder",
+	"lastVersion":           "lastVersion (optional) is the LastVersion of the BuildConfig that was used to generate the build. If the BuildConfig in the generator doesn't match, a build will not be generated.",
+	"env":                   "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported.",
+	"triggeredBy":           "triggeredBy describes which triggers started the most recent update to the build configuration and contains information about those triggers.",
+	"dockerStrategyOptions": "DockerStrategyOptions contains additional docker-strategy specific options for the build",
 }
 
 func (BuildRequest) SwaggerDoc() map[string]string {
@@ -191,10 +200,29 @@ var map_BuildStatus = map[string]string{
 	"duration":                   "duration contains time.Duration object describing build time.",
 	"outputDockerImageReference": "outputDockerImageReference contains a reference to the Docker image that will be built by this build. Its value is computed from Build.Spec.Output.To, and should include the registry address, so that it can be used to push and pull the image.",
 	"config":                     "config is an ObjectReference to the BuildConfig this Build is based on.",
+	"output":                     "output describes the Docker image the build has produced.",
 }
 
 func (BuildStatus) SwaggerDoc() map[string]string {
 	return map_BuildStatus
+}
+
+var map_BuildStatusOutput = map[string]string{
+	"":   "BuildStatusOutput contains the status of the built image.",
+	"to": "to describes the status of the built image being pushed to a registry.",
+}
+
+func (BuildStatusOutput) SwaggerDoc() map[string]string {
+	return map_BuildStatusOutput
+}
+
+var map_BuildStatusOutputTo = map[string]string{
+	"":            "BuildStatusOutputTo describes the status of the built image with regards to image registry to which it was supposed to be pushed.",
+	"imageDigest": "imageDigest is the digest of the built Docker image. The digest uniquely identifies the image in the registry to which it was pushed.\n\nPlease note that this field may not always be set even if the push completes successfully - e.g. when the registry returns no digest or returns it in a format that the builder doesn't understand.",
+}
+
+func (BuildStatusOutputTo) SwaggerDoc() map[string]string {
+	return map_BuildStatusOutputTo
 }
 
 var map_BuildStrategy = map[string]string{
@@ -216,6 +244,8 @@ var map_BuildTriggerCause = map[string]string{
 	"genericWebHook":   "genericWebHook holds data about a builds generic webhook trigger.",
 	"githubWebHook":    "gitHubWebHook represents data for a GitHub webhook that fired a specific build.",
 	"imageChangeBuild": "imageChangeBuild stores information about an imagechange event that triggered a new build.",
+	"gitlabWebHook":    "GitLabWebHook represents data for a GitLab webhook that fired a specific build.",
+	"bitbucketWebHook": "BitbucketWebHook represents data for a Bitbucket webhook that fired a specific build.",
 }
 
 func (BuildTriggerCause) SwaggerDoc() map[string]string {
@@ -228,6 +258,8 @@ var map_BuildTriggerPolicy = map[string]string{
 	"github":      "github contains the parameters for a GitHub webhook type of trigger",
 	"generic":     "generic contains the parameters for a Generic webhook type of trigger",
 	"imageChange": "imageChange contains parameters for an ImageChange type of trigger",
+	"gitlab":      "GitLabWebHook contains the parameters for a GitLab webhook type of trigger",
+	"bitbucket":   "BitbucketWebHook contains the parameters for a Bitbucket webhook type of trigger",
 }
 
 func (BuildTriggerPolicy) SwaggerDoc() map[string]string {
@@ -251,11 +283,21 @@ func (CommonSpec) SwaggerDoc() map[string]string {
 	return map_CommonSpec
 }
 
+var map_CommonWebHookCause = map[string]string{
+	"":         "CommonWebHookCause factors out the identical format of these webhook causes into struct so we can share it in the specific causes;  it is too late for GitHub and Generic but we can leverage this pattern with GitLab and Bitbucket.",
+	"revision": "Revision is the git source revision information of the trigger.",
+	"secret":   "Secret is the obfuscated webhook secret that triggered a build.",
+}
+
+func (CommonWebHookCause) SwaggerDoc() map[string]string {
+	return map_CommonWebHookCause
+}
+
 var map_CustomBuildStrategy = map[string]string{
 	"":                   "CustomBuildStrategy defines input parameters specific to Custom build.",
 	"from":               "from is reference to an DockerImage, ImageStreamTag, or ImageStreamImage from which the docker image should be pulled",
 	"pullSecret":         "pullSecret is the name of a Secret that would be used for setting up the authentication for pulling the Docker images from the private Docker registries",
-	"env":                "env contains additional environment variables you want to pass into a builder container",
+	"env":                "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported.",
 	"exposeDockerSocket": "exposeDockerSocket will allow running Docker commands (and build Docker images) from inside the Docker container.",
 	"forcePull":          "forcePull describes if the controller should configure the build pod to always pull the images for the builder or only pull if it is not present locally",
 	"secrets":            "secrets is a list of additional secrets that will be included in the build pod",
@@ -267,17 +309,28 @@ func (CustomBuildStrategy) SwaggerDoc() map[string]string {
 }
 
 var map_DockerBuildStrategy = map[string]string{
-	"":               "DockerBuildStrategy defines input parameters specific to Docker build.",
-	"from":           "from is reference to an DockerImage, ImageStreamTag, or ImageStreamImage from which the docker image should be pulled the resulting image will be used in the FROM line of the Dockerfile for this build.",
-	"pullSecret":     "pullSecret is the name of a Secret that would be used for setting up the authentication for pulling the Docker images from the private Docker registries",
-	"noCache":        "noCache if set to true indicates that the docker build must be executed with the --no-cache=true flag",
-	"env":            "env contains additional environment variables you want to pass into a builder container",
-	"forcePull":      "forcePull describes if the builder should pull the images from registry prior to building.",
-	"dockerfilePath": "dockerfilePath is the path of the Dockerfile that will be used to build the Docker image, relative to the root of the context (contextDir).",
+	"":                        "DockerBuildStrategy defines input parameters specific to Docker build.",
+	"from":                    "from is reference to an DockerImage, ImageStreamTag, or ImageStreamImage from which the docker image should be pulled the resulting image will be used in the FROM line of the Dockerfile for this build.",
+	"pullSecret":              "pullSecret is the name of a Secret that would be used for setting up the authentication for pulling the Docker images from the private Docker registries",
+	"noCache":                 "noCache if set to true indicates that the docker build must be executed with the --no-cache=true flag",
+	"env":                     "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported.",
+	"forcePull":               "forcePull describes if the builder should pull the images from registry prior to building.",
+	"dockerfilePath":          "dockerfilePath is the path of the Dockerfile that will be used to build the Docker image, relative to the root of the context (contextDir).",
+	"buildArgs":               "buildArgs contains build arguments that will be resolved in the Dockerfile.  See https://docs.docker.com/engine/reference/builder/#/arg for more details.",
+	"imageOptimizationPolicy": "imageOptimizationPolicy describes what optimizations the system can use when building images to reduce the final size or time spent building the image. The default policy is 'None' which means the final build image will be equivalent to an image created by the Docker build API. The experimental policy 'SkipLayers' will avoid commiting new layers in between each image step, and will fail if the Dockerfile cannot provide compatibility with the 'None' policy. An additional experimental policy 'SkipLayersAndWarn' is the same as 'SkipLayers' but simply warns if compatibility cannot be preserved.",
 }
 
 func (DockerBuildStrategy) SwaggerDoc() map[string]string {
 	return map_DockerBuildStrategy
+}
+
+var map_DockerStrategyOptions = map[string]string{
+	"":          "DockerStrategyOptions contains extra strategy options for Docker builds",
+	"buildArgs": "Args contains any build arguments that are to be passed to Docker.  See https://docs.docker.com/engine/reference/builder/#/arg for more details",
+}
+
+func (DockerStrategyOptions) SwaggerDoc() map[string]string {
+	return map_DockerStrategyOptions
 }
 
 var map_GenericWebHookCause = map[string]string{
@@ -294,7 +347,8 @@ var map_GenericWebHookEvent = map[string]string{
 	"":     "GenericWebHookEvent is the payload expected for a generic webhook post",
 	"type": "type is the type of source repository",
 	"git":  "git is the git information if the Type is BuildSourceGit",
-	"env":  "env contains additional environment variables you want to pass into a builder container",
+	"env":  "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported.",
+	"dockerStrategyOptions": "DockerStrategyOptions contains additional docker-strategy specific options for the build",
 }
 
 func (GenericWebHookEvent) SwaggerDoc() map[string]string {
@@ -327,6 +381,14 @@ var map_GitInfo = map[string]string{
 
 func (GitInfo) SwaggerDoc() map[string]string {
 	return map_GitInfo
+}
+
+var map_GitLabWebHookCause = map[string]string{
+	"": "GitLabWebHookCause has information about a GitLab webhook that triggered a build.",
+}
+
+func (GitLabWebHookCause) SwaggerDoc() map[string]string {
+	return map_GitLabWebHookCause
 }
 
 var map_GitSourceRevision = map[string]string{
@@ -396,6 +458,7 @@ var map_JenkinsPipelineBuildStrategy = map[string]string{
 	"":                "JenkinsPipelineBuildStrategy holds parameters specific to a Jenkins Pipeline build. This strategy is in tech preview.",
 	"jenkinsfilePath": "JenkinsfilePath is the optional path of the Jenkinsfile that will be used to configure the pipeline relative to the root of the context (contextDir). If both JenkinsfilePath & Jenkinsfile are both not specified, this defaults to Jenkinsfile in the root of the specified contextDir.",
 	"jenkinsfile":     "Jenkinsfile defines the optional raw contents of a Jenkinsfile which defines a Jenkins pipeline build.",
+	"env":             "env contains additional environment variables you want to pass into a build pipeline. ValueFrom is not supported.",
 }
 
 func (JenkinsPipelineBuildStrategy) SwaggerDoc() map[string]string {
@@ -437,12 +500,12 @@ var map_SourceBuildStrategy = map[string]string{
 	"":                 "SourceBuildStrategy defines input parameters specific to an Source build.",
 	"from":             "from is reference to an DockerImage, ImageStreamTag, or ImageStreamImage from which the docker image should be pulled",
 	"pullSecret":       "pullSecret is the name of a Secret that would be used for setting up the authentication for pulling the Docker images from the private Docker registries",
-	"env":              "env contains additional environment variables you want to pass into a builder container",
+	"env":              "env contains additional environment variables you want to pass into a builder container. ValueFrom is not supported.",
 	"scripts":          "scripts is the location of Source scripts",
 	"incremental":      "incremental flag forces the Source build to do incremental builds if true.",
 	"forcePull":        "forcePull describes if the builder should pull the images from registry prior to building.",
-	"runtimeImage":     "runtimeImage is an optional image that is used to run an application without unneeded dependencies installed. The building of the application is still done in the builder image but, post build, you can copy the needed artifacts in the runtime image for use. This field and the feature it enables are in tech preview.",
-	"runtimeArtifacts": "runtimeArtifacts specifies a list of source/destination pairs that will be copied from the builder to the runtime image. sourcePath can be a file or directory. destinationDir must be a directory. destinationDir can also be empty or equal to \".\", in this case it just refers to the root of WORKDIR. This field and the feature it enables are in tech preview.",
+	"runtimeImage":     "runtimeImage is an optional image that is used to run an application without unneeded dependencies installed. The building of the application is still done in the builder image but, post build, you can copy the needed artifacts in the runtime image for use. Deprecated: This feature will be removed in a future release. Use ImageSource to copy binary artifacts created from one build into a separate runtime image.",
+	"runtimeArtifacts": "runtimeArtifacts specifies a list of source/destination pairs that will be copied from the builder to the runtime image. sourcePath can be a file or directory. destinationDir must be a directory. destinationDir can also be empty or equal to \".\", in this case it just refers to the root of WORKDIR. Deprecated: This feature will be removed in a future release. Use ImageSource to copy binary artifacts created from one build into a separate runtime image.",
 }
 
 func (SourceBuildStrategy) SwaggerDoc() map[string]string {

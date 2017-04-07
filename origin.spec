@@ -9,7 +9,7 @@
 %global kube_plugin_path /usr/libexec/kubernetes/kubelet-plugins/net/exec/redhat~openshift-ovs-subnet
 
 # docker_version is the version of docker requires by packages
-%global docker_version 1.9.1
+%global docker_version 1.12
 # tuned_version is the version of tuned requires by packages
 %global tuned_version  2.3
 # openvswitch_version is the version of openvswitch requires by packages
@@ -29,16 +29,17 @@
 %global os_git_vars OS_GIT_VERSION='' OS_GIT_COMMIT='' OS_GIT_MAJOR='' OS_GIT_MINOR='' OS_GIT_TREE_STATE=''
 }
 
-%{!?make_redistributable:
 %if 0%{?fedora} || 0%{?epel}
-%global make_redistributable 0
+%global need_redistributable_set 0
 %else
-%global make_redistributable 1
+# Due to library availability, redistributable builds only work on x86_64
+%ifarch x86_64
+%global need_redistributable_set 1
+%else
+%global need_redistributable_set 0
 %endif
-}
-
-# by default build the test binaries for Origin
-%{!?build_tests: %global build_tests 1 }
+%endif
+%{!?make_redistributable: %global make_redistributable %{need_redistributable_set}}
 
 %if "%{dist}" == ".el7aos"
 %global package_name atomic-openshift
@@ -61,7 +62,7 @@ URL:            https://%{import_path}
 %if 0%{?go_arches:1}
 ExclusiveArch:  %{go_arches}
 %else
-ExclusiveArch:  x86_64 aarch64 ppc64le
+ExclusiveArch:  x86_64 aarch64 ppc64le s390x
 %endif
 
 Source0:        https://%{import_path}/archive/%{commit}/%{name}-%{version}.tar.gz
@@ -85,11 +86,13 @@ Obsoletes:      openshift < %{package_refector_version}
 ### AUTO-BUNDLED-GEN-ENTRY-POINT
 
 %description
-Origin is a distribution of Kubernetes optimized for enterprise application
-development and deployment, used by OpenShift 3 and Atomic Enterprise. Origin
-adds developer and operational centric tools on top of Kubernetes to enable
-rapid application development, easy deployment and scaling, and long-term
-lifecycle maintenance for small and large teams and applications.
+OpenShift is a distribution of Kubernetes optimized for enterprise application
+development and deployment. OpenShift adds developer and operational centric
+tools on top of Kubernetes to enable rapid application development, easy
+deployment and scaling, and long-term lifecycle maintenance for small and large
+teams and applications. It provides a secure and multi-tenant configuration for
+Kubernetes allowing you to safely host many different applications and workloads
+on a unified cluster.
 
 %package master
 Summary:        %{product_name} Master
@@ -102,14 +105,12 @@ Obsoletes:      openshift-master < %{package_refector_version}
 %description master
 %{summary}
 
-%if 0%{build_tests}
 %package tests
 Summary: %{product_name} Test Suite
 Requires:       %{name} = %{version}-%{release}
 
 %description tests
 %{summary}
-%endif
 
 %package node
 Summary:        %{product_name} Node
@@ -206,13 +207,31 @@ of docker.  Exclude those versions of docker.
 %setup -q
 
 %build
-# Create Binaries
+%if 0%{make_redistributable}
+# Create Binaries for all supported arches
 %{os_git_vars} hack/build-cross.sh
-
-%if 0%{build_tests}
-# Create extended.test
-%{os_git_vars} hack/build-go.sh test/extended/extended.test
+%else
+# Create Binaries only for building arch
+%ifarch x86_64
+  BUILD_PLATFORM="linux/amd64"
 %endif
+%ifarch %{ix86}
+  BUILD_PLATFORM="linux/386"
+%endif
+%ifarch ppc64le
+  BUILD_PLATFORM="linux/ppc64le"
+%endif
+%ifarch %{arm} aarch64
+  BUILD_PLATFORM="linux/arm64"
+%endif
+%ifarch s390x
+  BUILD_PLATFORM="linux/s390x"
+%endif
+OS_ONLY_BUILD_PLATFORMS="${BUILD_PLATFORM}" %{os_git_vars} hack/build-cross.sh
+%endif
+
+# Generate man pages
+%{os_git_vars} hack/generate-docs.sh
 
 %install
 
@@ -226,9 +245,7 @@ do
   install -p -m 755 _output/local/bin/${PLATFORM}/${bin} %{buildroot}%{_bindir}/${bin}
 done
 install -d %{buildroot}%{_libexecdir}/%{name}
-%if 0%{build_tests}
 install -p -m 755 _output/local/bin/${PLATFORM}/extended.test %{buildroot}%{_libexecdir}/%{name}/
-%endif
 
 %if 0%{?make_redistributable}
 # Install client executable for windows and mac
@@ -246,7 +263,6 @@ install -d -m 0755 %{buildroot}%{_unitdir}
 mkdir -p %{buildroot}%{_sysconfdir}/sysconfig
 
 for cmd in \
-    atomic-enterprise \
     kube-apiserver \
     kube-controller-manager \
     kube-proxy \
@@ -314,7 +330,7 @@ install -p -m 0644 contrib/systemd/openshift-sdn-ovs.conf %{buildroot}%{_unitdir
 
 # Install bash completions
 install -d -m 755 %{buildroot}%{_sysconfdir}/bash_completion.d/
-for bin in oadm oc openshift atomic-enterprise
+for bin in oadm oc openshift
 do
   echo "+++ INSTALLING BASH COMPLETIONS FOR ${bin} "
   %{buildroot}%{_bindir}/${bin} completion bash > %{buildroot}%{_sysconfdir}/bash_completion.d/${bin}
@@ -335,7 +351,7 @@ mkdir -p $RPM_BUILD_ROOT/usr/sbin
 
 # Install openshift-excluder script
 sed "s|@@CONF_FILE-VARIABLE@@|${OS_CONF_FILE}|" contrib/excluder/excluder-template > $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
-sed -i "s|@@PACKAGE_LIST-VARIABLE@@|%{name} %{name}-clients %{name}-clients-redistributable %{name}-dockerregistry %{name}-master %{name}-node %{name}-pod %{name}-recycle %{name}-sdn-ovs %{name}-tests tuned-profiles-%{name}-node %{name}-excluder %{name}-docker-excluder|" $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
+sed -i "s|@@PACKAGE_LIST-VARIABLE@@|%{name} %{name}-clients %{name}-clients-redistributable %{name}-dockerregistry %{name}-master %{name}-node %{name}-pod %{name}-recycle %{name}-sdn-ovs %{name}-tests tuned-profiles-%{name}-node|" $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
 chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-excluder
 
 # Install docker-excluder script
@@ -343,12 +359,14 @@ sed "s|@@CONF_FILE-VARIABLE@@|${OS_CONF_FILE}|" contrib/excluder/excluder-templa
 sed -i "s|@@PACKAGE_LIST-VARIABLE@@|docker*1.13* docker*1.14* docker*1.15* docker*1.16* docker*1.17* docker*1.18* docker*1.19* docker*1.20*|" $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 
+# Install migration scripts
+install -d %{buildroot}%{_datadir}/%{name}/migration
+install -p -m 755 contrib/migration/* %{buildroot}%{_datadir}/%{name}/migration/
 
 %files
 %doc README.md
 %license LICENSE
 %{_bindir}/openshift
-%{_bindir}/atomic-enterprise
 %{_bindir}/kube-apiserver
 %{_bindir}/kube-controller-manager
 %{_bindir}/kube-proxy
@@ -364,7 +382,6 @@ chmod 0744 $RPM_BUILD_ROOT/usr/sbin/%{name}-docker-excluder
 %{_bindir}/openshift-sti-build
 %{_bindir}/origin
 %{_sharedstatedir}/origin
-%{_sysconfdir}/bash_completion.d/atomic-enterprise
 %{_sysconfdir}/bash_completion.d/oadm
 %{_sysconfdir}/bash_completion.d/openshift
 %defattr(-,root,root,0700)
@@ -387,15 +404,15 @@ if [ -d "%{_sharedstatedir}/openshift" ]; then
   fi
 fi
 
-%if 0%{build_tests}
 %files tests
 %{_libexecdir}/%{name}
 %{_libexecdir}/%{name}/extended.test
-%endif
 
 %files master
 %{_unitdir}/%{name}-master.service
 %config(noreplace) %{_sysconfdir}/sysconfig/%{name}-master
+%dir %{_datadir}/%{name}/migration/
+%{_datadir}/%{name}/migration/*
 %defattr(-,root,root,0700)
 %config(noreplace) %{_sysconfdir}/origin/master
 %ghost %config(noreplace) %{_sysconfdir}/origin/admin.crt
@@ -535,12 +552,19 @@ fi
 %files excluder
 /usr/sbin/%{name}-excluder
 
-%post excluder
-if [ "$1" -eq 1 ] ; then
-  %{name}-excluder exclude
+%pretrans excluder
+# we always want to clear this out using the last
+#   versions script.  Otherwise excludes might get left in
+if [ -s /usr/sbin/%{name}-excluder ] ; then
+  /usr/sbin/%{name}-excluder unexclude
 fi
 
+%posttrans excluder
+# we always want to run this after an install or update
+/usr/sbin/%{name}-excluder exclude
+
 %preun excluder
+# If we are the last one, clean things up
 if [ "$1" -eq 0 ] ; then
   /usr/sbin/%{name}-excluder unexclude
 fi
@@ -548,15 +572,22 @@ fi
 %files docker-excluder
 /usr/sbin/%{name}-docker-excluder
 
-%post docker-excluder
-# we always want to run this, since the 
-#   package-list may be different with each version
-%{name}-docker-excluder exclude
+%pretrans docker-excluder
+# we always want to clear this out using the last
+#   versions script.  Otherwise excludes might get left in
+if [ -s /usr/sbin/%{name}-docker-excluder ] ; then
+  /usr/sbin/%{name}-docker-excluder unexclude
+fi
+
+%posttrans docker-excluder
+# we always want to run this after an install or update
+/usr/sbin/%{name}-docker-excluder exclude
 
 %preun docker-excluder
-# we always want to clear this out, since the 
-#   package-list may be different with each version
-/usr/sbin/%{name}-docker-excluder unexclude
+# If we are the last one, clean things up
+if [ "$1" -eq 0 ] ; then
+  /usr/sbin/%{name}-docker-excluder unexclude
+fi
 
 %changelog
 * Fri Sep 18 2015 Scott Dodson <sdodson@redhat.com> 0.2-9

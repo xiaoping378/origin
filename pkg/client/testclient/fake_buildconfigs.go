@@ -74,13 +74,17 @@ func (c *FakeBuildConfigs) WebHookURL(name string, trigger *buildapi.BuildTrigge
 		return url.Parse(fmt.Sprintf("http://localhost/buildConfigHooks/%s/%s/generic", name, trigger.GenericWebHook.Secret))
 	case trigger.GitHubWebHook != nil:
 		return url.Parse(fmt.Sprintf("http://localhost/buildConfigHooks/%s/%s/github", name, trigger.GitHubWebHook.Secret))
+	case trigger.GitLabWebHook != nil:
+		return url.Parse(fmt.Sprintf("http://localhost/buildConfigHooks/%s/%s/gitlab", name, trigger.GitLabWebHook.Secret))
+	case trigger.BitbucketWebHook != nil:
+		return url.Parse(fmt.Sprintf("http://localhost/buildConfigHooks/%s/%s/bitbucket", name, trigger.BitbucketWebHook.Secret))
 	default:
 		return nil, client.ErrTriggerIsNotAWebHook
 	}
 }
 
 func (c *FakeBuildConfigs) Instantiate(request *buildapi.BuildRequest) (result *buildapi.Build, err error) {
-	action := core.NewCreateAction(buildapi.SchemeGroupVersion.WithResource("builds"), c.Namespace, request)
+	action := core.NewCreateAction(buildapi.LegacySchemeGroupVersion.WithResource("builds"), c.Namespace, request)
 	action.Subresource = "instantiate"
 	obj, err := c.Fake.Invokes(action, &buildapi.Build{})
 	if obj == nil {
@@ -91,7 +95,7 @@ func (c *FakeBuildConfigs) Instantiate(request *buildapi.BuildRequest) (result *
 }
 
 func (c *FakeBuildConfigs) InstantiateBinary(request *buildapi.BinaryBuildRequestOptions, r io.Reader) (result *buildapi.Build, err error) {
-	action := core.NewCreateAction(buildapi.SchemeGroupVersion.WithResource("builds"), c.Namespace, request)
+	action := core.NewCreateAction(buildapi.LegacySchemeGroupVersion.WithResource("builds"), c.Namespace, request)
 	action.Subresource = "instantiatebinary"
 	obj, err := c.Fake.Invokes(action, &buildapi.Build{})
 	if obj == nil {

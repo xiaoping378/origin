@@ -3,7 +3,9 @@ package plugin
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 
 	log "github.com/golang/glog"
 
@@ -62,7 +64,7 @@ func (master *OsdnMaster) addNode(nodeName string, nodeIP string, hsAnnotations 
 			sub.HostIP = nodeIP
 			sub, err = master.osClient.HostSubnets().Update(sub)
 			if err != nil {
-				return fmt.Errorf("Error updating subnet %s for node %s: %v", sub.Subnet, nodeName, err)
+				return fmt.Errorf("error updating subnet %s for node %s: %v", sub.Subnet, nodeName, err)
 			}
 			log.Infof("Updated HostSubnet %s", hostSubnetToString(sub))
 			return nil
@@ -72,7 +74,7 @@ func (master *OsdnMaster) addNode(nodeName string, nodeIP string, hsAnnotations 
 	// Create new subnet
 	sn, err := master.subnetAllocator.GetNetwork()
 	if err != nil {
-		return fmt.Errorf("Error allocating network for node %s: %v", nodeName, err)
+		return fmt.Errorf("error allocating network for node %s: %v", nodeName, err)
 	}
 
 	sub = &osapi.HostSubnet{
@@ -85,7 +87,7 @@ func (master *OsdnMaster) addNode(nodeName string, nodeIP string, hsAnnotations 
 	sub, err = master.osClient.HostSubnets().Create(sub)
 	if err != nil {
 		master.subnetAllocator.ReleaseNetwork(sn)
-		return fmt.Errorf("Error creating subnet %s for node %s: %v", sn.String(), nodeName, err)
+		return fmt.Errorf("error creating subnet %s for node %s: %v", sn.String(), nodeName, err)
 	}
 	log.Infof("Created HostSubnet %s", hostSubnetToString(sub))
 	return nil
@@ -94,11 +96,11 @@ func (master *OsdnMaster) addNode(nodeName string, nodeIP string, hsAnnotations 
 func (master *OsdnMaster) deleteNode(nodeName string) error {
 	sub, err := master.osClient.HostSubnets().Get(nodeName)
 	if err != nil {
-		return fmt.Errorf("Error fetching subnet for node %q for deletion: %v", nodeName, err)
+		return fmt.Errorf("error fetching subnet for node %q for deletion: %v", nodeName, err)
 	}
 	err = master.osClient.HostSubnets().Delete(nodeName)
 	if err != nil {
-		return fmt.Errorf("Error deleting subnet %v for node %q: %v", sub, nodeName, err)
+		return fmt.Errorf("error deleting subnet %v for node %q: %v", sub, nodeName, err)
 	}
 
 	log.Infof("Deleted HostSubnet %s", hostSubnetToString(sub))
@@ -156,7 +158,7 @@ func (master *OsdnMaster) clearInitialNodeNetworkUnavailableCondition(node *kapi
 		return err
 	})
 	if resultErr != nil {
-		utilruntime.HandleError(fmt.Errorf("Status update failed for local node: %v", resultErr))
+		utilruntime.HandleError(fmt.Errorf("status update failed for local node: %v", resultErr))
 	} else if cleared {
 		log.Infof("Cleared node NetworkUnavailable/NoRouteCreated condition for %s", node.ObjectMeta.Name)
 	}
@@ -195,7 +197,7 @@ func (master *OsdnMaster) watchNodes() {
 
 			err = master.deleteNode(name)
 			if err != nil {
-				return fmt.Errorf("Error deleting node %s: %v", name, err)
+				return fmt.Errorf("error deleting node %s: %v", name, err)
 			}
 		}
 		return nil
@@ -231,13 +233,13 @@ func (master *OsdnMaster) watchSubnets() {
 					return nil
 				}
 				var hsAnnotations map[string]string
-				if vnid, ok := hs.Annotations[osapi.FixedVnidHost]; ok {
+				if vnid, ok := hs.Annotations[osapi.FixedVNIDHostAnnotation]; ok {
 					vnidInt, err := strconv.Atoi(vnid)
 					if err == nil && vnidInt >= 0 && uint32(vnidInt) <= osapi.MaxVNID {
 						hsAnnotations = make(map[string]string)
-						hsAnnotations[osapi.FixedVnidHost] = strconv.Itoa(vnidInt)
+						hsAnnotations[osapi.FixedVNIDHostAnnotation] = strconv.Itoa(vnidInt)
 					} else {
-						log.Errorf("Vnid %s is an invalid value for annotation %s. Annotation will be ignored.", vnid, osapi.FixedVnidHost)
+						log.Errorf("Vnid %s is an invalid value for annotation %s. Annotation will be ignored.", vnid, osapi.FixedVNIDHostAnnotation)
 					}
 				}
 				err = master.addNode(name, hostIP, hsAnnotations)
@@ -251,7 +253,7 @@ func (master *OsdnMaster) watchSubnets() {
 				// release the subnet
 				_, ipnet, err := net.ParseCIDR(subnet)
 				if err != nil {
-					return fmt.Errorf("Error parsing subnet %q for node %q for deletion: %v", subnet, name, err)
+					return fmt.Errorf("error parsing subnet %q for node %q for deletion: %v", subnet, name, err)
 				}
 				master.subnetAllocator.ReleaseNetwork(ipnet)
 			}
@@ -260,9 +262,29 @@ func (master *OsdnMaster) watchSubnets() {
 	})
 }
 
+type hostSubnetMap map[string]*osapi.HostSubnet
+
+func (plugin *OsdnNode) updateVXLANMulticastRules(subnets hostSubnetMap) {
+	otx := plugin.ovs.NewTransaction()
+
+	// Build the list of all nodes for multicast forwarding
+	tun_dsts := make([]string, 0, len(subnets))
+	for _, subnet := range subnets {
+		if subnet.HostIP != plugin.localIP {
+			tun_dsts = append(tun_dsts, fmt.Sprintf(",set_field:%s->tun_dst,output:1", subnet.HostIP))
+		}
+	}
+	sort.Strings(tun_dsts)
+	otx.AddFlow("table=111, priority=100, actions=move:NXM_NX_REG0[]->NXM_NX_TUN_ID[0..31]%s,goto_table:120", strings.Join(tun_dsts, ""))
+
+	if err := otx.EndTransaction(); err != nil {
+		log.Errorf("Error updating OVS VXLAN multicast flows: %v", err)
+	}
+}
+
 // Only run on the nodes
 func (node *OsdnNode) watchSubnets() {
-	subnets := make(map[string]*osapi.HostSubnet)
+	subnets := make(hostSubnetMap)
 	RunEventQueue(node.osClient, HostSubnets, func(delta cache.Delta) error {
 		hs := delta.Object.(*osapi.HostSubnet)
 		if hs.HostIP == node.localIP {
@@ -292,6 +314,8 @@ func (node *OsdnNode) watchSubnets() {
 			delete(subnets, string(hs.UID))
 			node.DeleteHostSubnetRules(hs)
 		}
+		// Update multicast rules after all other changes have been processed
+		node.updateVXLANMulticastRules(subnets)
 		return nil
 	})
 }

@@ -12,14 +12,15 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
+	"k8s.io/kubernetes/pkg/auth/authorizer"
 	"k8s.io/kubernetes/pkg/auth/user"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/watch"
 
 	authenticationapi "github.com/openshift/origin/pkg/auth/api"
-	"github.com/openshift/origin/pkg/authorization/authorizer"
 	configapi "github.com/openshift/origin/pkg/cmd/server/api"
+	serverhandlers "github.com/openshift/origin/pkg/cmd/server/handlers"
 	"github.com/openshift/origin/pkg/cmd/server/kubernetes"
 	userapi "github.com/openshift/origin/pkg/user/api"
 	usercache "github.com/openshift/origin/pkg/user/cache"
@@ -27,9 +28,9 @@ import (
 
 type impersonateAuthorizer struct{}
 
-func (impersonateAuthorizer) Authorize(ctx kapi.Context, a authorizer.Action) (allowed bool, reason string, err error) {
-	user, exists := kapi.UserFrom(ctx)
-	if !exists {
+func (impersonateAuthorizer) Authorize(a authorizer.Attributes) (allowed bool, reason string, err error) {
+	user := a.GetUser()
+	if user == nil {
 		return false, "missing user", nil
 	}
 
@@ -66,7 +67,7 @@ func (impersonateAuthorizer) Authorize(ctx kapi.Context, a authorizer.Action) (a
 	return false, "deny by default", nil
 }
 
-func (impersonateAuthorizer) GetAllowedSubjects(ctx kapi.Context, attributes authorizer.Action) (sets.String, sets.String, error) {
+func (impersonateAuthorizer) GetAllowedSubjects(attributes authorizer.Attributes) (sets.String, sets.String, error) {
 	return nil, nil, nil
 }
 
@@ -286,7 +287,7 @@ func TestImpersonationFilter(t *testing.T) {
 
 			delegate.ServeHTTP(w, req)
 		})
-	}(config.impersonationFilter(doNothingHandler))
+	}(serverhandlers.ImpersonationFilter(doNothingHandler, config.Authorizer, config.GroupCache, config.RequestContextMapper))
 	handler = kapi.WithRequestContext(handler, config.RequestContextMapper)
 
 	server := httptest.NewServer(handler)

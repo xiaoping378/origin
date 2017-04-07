@@ -29,7 +29,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blang/semver"
 	"github.com/golang/glog"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fs"
@@ -44,9 +43,9 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/util/oom"
 	"k8s.io/kubernetes/pkg/util/procfs"
-	"k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/sets"
 	utilsysctl "k8s.io/kubernetes/pkg/util/sysctl"
+	utilversion "k8s.io/kubernetes/pkg/util/version"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
 
@@ -66,7 +65,7 @@ const (
 
 var (
 	// The docker version in which containerd was introduced.
-	containerdVersion = semver.MustParse("1.11.0")
+	containerdVersion = utilversion.MustParseSemantic("1.11.0")
 )
 
 // A non-user container tracked by the Kubelet.
@@ -617,25 +616,35 @@ func getPidFromPidFile(pidFile string) (int, error) {
 }
 
 func getPidsForProcess(name, pidFile string) ([]int, error) {
-	if len(pidFile) > 0 {
-		if pid, err := getPidFromPidFile(pidFile); err == nil {
-			return []int{pid}, nil
-		} else {
-			// log the error and fall back to pidof
-			runtime.HandleError(err)
-		}
+	if len(pidFile) == 0 {
+		return procfs.PidOf(name)
 	}
-	return procfs.PidOf(name)
+
+	pid, err := getPidFromPidFile(pidFile)
+	if err == nil {
+		return []int{pid}, nil
+	}
+
+	// Try to lookup pid by process name
+	pids, err2 := procfs.PidOf(name)
+	if err2 == nil {
+		return pids, nil
+	}
+
+	// Return error from getPidFromPidFile since that should have worked
+	// and is the real source of the problem.
+	glog.V(4).Infof("unable to get pid from %s: %v", pidFile, err)
+	return []int{}, err
 }
 
 // Ensures that the Docker daemon is in the desired container.
 // Temporarily export the function to be used by dockershim.
 // TODO(yujuhong): Move this function to dockershim once kubelet migrates to
 // dockershim as the default.
-func EnsureDockerInContainer(dockerVersion semver.Version, oomScoreAdj int, manager *fs.Manager) error {
+func EnsureDockerInContainer(dockerVersion *utilversion.Version, oomScoreAdj int, manager *fs.Manager) error {
 	type process struct{ name, file string }
 	dockerProcs := []process{{dockerProcessName, dockerPidFile}}
-	if dockerVersion.GTE(containerdVersion) {
+	if dockerVersion.AtLeast(containerdVersion) {
 		dockerProcs = append(dockerProcs, process{containerdProcessName, containerdPidFile})
 	}
 	var errs []error
@@ -797,17 +806,16 @@ func isKernelPid(pid int) bool {
 }
 
 // Helper for getting the docker version.
-func getDockerVersion(cadvisor cadvisor.Interface) semver.Version {
-	var fallback semver.Version // Fallback to zero-value by default.
+func getDockerVersion(cadvisor cadvisor.Interface) *utilversion.Version {
 	versions, err := cadvisor.VersionInfo()
 	if err != nil {
 		glog.Errorf("Error requesting cAdvisor VersionInfo: %v", err)
-		return fallback
+		return utilversion.MustParseSemantic("0.0.0")
 	}
-	dockerVersion, err := semver.Parse(versions.DockerVersion)
+	dockerVersion, err := utilversion.ParseSemantic(versions.DockerVersion)
 	if err != nil {
 		glog.Errorf("Error parsing docker version %q: %v", versions.DockerVersion, err)
-		return fallback
+		return utilversion.MustParseSemantic("0.0.0")
 	}
 	return dockerVersion
 }

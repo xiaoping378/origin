@@ -2,20 +2,20 @@ package secretinjector
 
 import (
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/golang/glog"
-	authclient "github.com/openshift/origin/pkg/auth/client"
-	buildapi "github.com/openshift/origin/pkg/build/api"
-	"github.com/openshift/origin/pkg/util/urlpattern"
 
 	"k8s.io/kubernetes/pkg/admission"
 	"k8s.io/kubernetes/pkg/api"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	coreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/client/restclient"
+
+	authclient "github.com/openshift/origin/pkg/auth/client"
+	buildapi "github.com/openshift/origin/pkg/build/api"
+	oadmission "github.com/openshift/origin/pkg/cmd/server/admission"
+	"github.com/openshift/origin/pkg/util/urlpattern"
 )
 
 func init() {
@@ -31,6 +31,8 @@ type secretInjector struct {
 	restClientConfig restclient.Config
 }
 
+var _ = oadmission.WantsRESTClientConfig(&secretInjector{})
+
 func (si *secretInjector) Admit(attr admission.Attributes) (err error) {
 	bc, ok := attr.GetObject().(*buildapi.BuildConfig)
 	if !ok {
@@ -41,12 +43,7 @@ func (si *secretInjector) Admit(attr admission.Attributes) (err error) {
 		return nil
 	}
 
-	impersonatingConfig := si.restClientConfig
-	impersonatingConfig.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-		return authclient.NewImpersonatingRoundTripper(attr.GetUserInfo(), si.restClientConfig.WrapTransport(rt))
-	}
-
-	client, err := coreclient.NewForConfig(&impersonatingConfig)
+	client, err := authclient.NewImpersonatingKubernetesClientset(attr.GetUserInfo(), si.restClientConfig)
 	if err != nil {
 		glog.V(2).Infof("secretinjector: could not create client: %v", err)
 		return nil
@@ -60,7 +57,7 @@ func (si *secretInjector) Admit(attr admission.Attributes) (err error) {
 		return nil
 	}
 
-	secrets, err := client.Secrets(namespace).List(api.ListOptions{})
+	secrets, err := client.Core().Secrets(namespace).List(api.ListOptions{})
 	if err != nil {
 		glog.V(2).Infof("secretinjector: failed to list Secrets: %v", err)
 		return nil
@@ -103,4 +100,8 @@ func (si *secretInjector) Admit(attr admission.Attributes) (err error) {
 
 func (si *secretInjector) SetRESTClientConfig(restClientConfig restclient.Config) {
 	si.restClientConfig = restClientConfig
+}
+
+func (si *secretInjector) Validate() error {
+	return nil
 }

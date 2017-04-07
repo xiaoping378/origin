@@ -43,16 +43,35 @@ var (
 	// exposed externally.
 	DeadOpenShiftStorageVersionLevels = []string{"v1beta1", "v1beta3"}
 
-	APIGroupKube           = ""
-	APIGroupExtensions     = "extensions"
-	APIGroupApps           = "apps"
-	APIGroupAuthentication = "authentication.k8s.io"
-	APIGroupAutoscaling    = "autoscaling"
-	APIGroupBatch          = "batch"
-	APIGroupCertificates   = "certificates.k8s.io"
-	APIGroupFederation     = "federation"
-	APIGroupPolicy         = "policy"
-	APIGroupStorage        = "storage.k8s.io"
+	APIGroupKube              = ""
+	APIGroupExtensions        = "extensions"
+	APIGroupApps              = "apps"
+	APIGroupAuthentication    = "authentication.k8s.io"
+	APIGroupAuthorization     = "authorization.k8s.io"
+	APIGroupImagePolicy       = "imagepolicy.k8s.io"
+	APIGroupAutoscaling       = "autoscaling"
+	APIGroupBatch             = "batch"
+	APIGroupCertificates      = "certificates.k8s.io"
+	APIGroupFederation        = "federation"
+	APIGroupPolicy            = "policy"
+	APIGroupStorage           = "storage.k8s.io"
+	APIGroupComponentConfig   = "componentconfig"
+	APIGroupAuthorizationRbac = "rbac.authorization.k8s.io"
+
+	OriginAPIGroupCore                = ""
+	OriginAPIGroupAuthorization       = "authorization.openshift.io"
+	OriginAPIGroupBuild               = "build.openshift.io"
+	OriginAPIGroupDeploy              = "apps.openshift.io"
+	OriginAPIGroupTemplate            = "template.openshift.io"
+	OriginAPIGroupImage               = "image.openshift.io"
+	OriginAPIGroupProject             = "project.openshift.io"
+	OriginAPIGroupProjectRequestLimit = "requestlimit.project.openshift.io"
+	OriginAPIGroupUser                = "user.openshift.io"
+	OriginAPIGroupOAuth               = "oauth.openshift.io"
+	OriginAPIGroupRoute               = "route.openshift.io"
+	OriginAPIGroupNetwork             = "network.openshift.io"
+	OriginAPIGroupQuota               = "quota.openshift.io"
+	OriginAPIGroupSecurity            = "security.openshift.io"
 
 	// Map of group names to allowed REST API versions
 	KubeAPIGroupsToAllowedVersions = map[string][]string{
@@ -60,6 +79,7 @@ var (
 		APIGroupExtensions:     {"v1beta1"},
 		APIGroupApps:           {"v1beta1"},
 		APIGroupAuthentication: {"v1beta1"},
+		APIGroupAuthorization:  {"v1beta1"},
 		APIGroupAutoscaling:    {"v1"},
 		APIGroupBatch:          {"v1", "v2alpha1"},
 		APIGroupCertificates:   {"v1alpha1"},
@@ -68,6 +88,22 @@ var (
 		// TODO: enable as part of a separate binary
 		//APIGroupFederation:  {"v1beta1"},
 	}
+
+	OriginAPIGroupsToAllowedVersions = map[string][]string{
+		OriginAPIGroupAuthorization: {"v1"},
+		OriginAPIGroupBuild:         {"v1"},
+		OriginAPIGroupDeploy:        {"v1"},
+		OriginAPIGroupTemplate:      {"v1"},
+		OriginAPIGroupImage:         {"v1"},
+		OriginAPIGroupProject:       {"v1"},
+		OriginAPIGroupUser:          {"v1"},
+		OriginAPIGroupOAuth:         {"v1"},
+		OriginAPIGroupNetwork:       {"v1"},
+		OriginAPIGroupRoute:         {"v1"},
+		OriginAPIGroupQuota:         {"v1"},
+		OriginAPIGroupSecurity:      {"v1"},
+	}
+
 	// Map of group names to known, but disallowed REST API versions
 	KubeAPIGroupsToDeadVersions = map[string][]string{
 		APIGroupKube:        {"v1beta3"},
@@ -77,7 +113,8 @@ var (
 		APIGroupPolicy:      {},
 		APIGroupApps:        {},
 	}
-	KnownKubeAPIGroups = sets.StringKeySet(KubeAPIGroupsToAllowedVersions)
+	KnownKubeAPIGroups   = sets.StringKeySet(KubeAPIGroupsToAllowedVersions)
+	KnownOriginAPIGroups = sets.StringKeySet(OriginAPIGroupsToAllowedVersions)
 
 	// FeatureAliases maps deprecated names of feature flag to their canonical
 	// names. Aliases must be lower-cased for O(1) lookup.
@@ -87,6 +124,23 @@ var (
 	}
 	KnownOpenShiftFeatures = []string{FeatureBuilder, FeatureS2I, FeatureWebConsole}
 	AtomicDisabledFeatures = []string{FeatureBuilder, FeatureS2I, FeatureWebConsole}
+
+	// List public registries that we are allowing to import images from by default.
+	// By default all registries have set to be "secure", iow. the port for them is
+	// defaulted to "443".
+	// If the registry you are adding here is insecure, you can add 'Insecure: true' to
+	// make it default to port '80'.
+	// If the registry you are adding use custom port, you have to specify the port as
+	// part of the domain name.
+	DefaultAllowedRegistriesForImport = &AllowedRegistries{
+		{DomainName: "docker.io"},
+		{DomainName: "*.docker.io"}, // registry-1.docker.io
+		{DomainName: "registry.access.redhat.com"},
+		{DomainName: "gcr.io"},
+		{DomainName: "quay.io"},
+		// FIXME: Probably need to have more fine-tuned pattern defined
+		{DomainName: "*.amazonaws.com"},
+	}
 )
 
 type ExtendedArguments map[string][]string
@@ -112,11 +166,29 @@ type NodeConfig struct {
 	// MasterClientConnectionOverrides provides overrides to the client connection used to connect to the master.
 	MasterClientConnectionOverrides *ClientConnectionOverrides
 
-	// DNSDomain holds the domain suffix
+	// DNSDomain holds the domain suffix that will be used for the DNS search path inside each container. Defaults to
+	// 'cluster.local'.
 	DNSDomain string
 
-	// DNSIP holds the IP
+	// DNSIP is the IP address that pods will use to access cluster DNS. Defaults to the service IP of the Kubernetes
+	// master. This IP must be listening on port 53 for compatibility with libc resolvers (which cannot be configured
+	// to resolve names from any other port). When running more complex local DNS configurations, this is often set
+	// to the local address of a DNS proxy like dnsmasq, which then will consult either the local DNS (see
+	// dnsBindAddress) or the master DNS.
 	DNSIP string
+
+	// DNSBindAddress is the ip:port to serve DNS on. If this is not set, the DNS server will not be started.
+	// Because most DNS resolvers will only listen on port 53, if you select an alternative port you will need
+	// a DNS proxy like dnsmasq to answer queries for containers. A common configuration is dnsmasq configured
+	// on a node IP listening on 53 and delegating queries for dnsDomain to this process, while sending other
+	// queries to the host environments nameservers.
+	DNSBindAddress string
+
+	// DNSNameservers is a list of ip:port values of recursive nameservers to forward queries to when running
+	// a local DNS server if dnsBindAddress is set. If this value is empty, the DNS server will default to
+	// the nameservers listed in /etc/resolv.conf. If you have configured dnsmasq or another DNS proxy on the
+	// system, this value should be set to the upstream nameservers dnsmasq resolves with.
+	DNSNameservers []string
 
 	// NetworkConfig provides network options for the node
 	NetworkConfig NodeNetworkConfig
@@ -234,6 +306,10 @@ type MasterConfig struct {
 	// ServingInfo describes how to start serving
 	ServingInfo HTTPServingInfo
 
+	// AuthConfig configures authentication options in addition to the standard
+	// oauth token and client certificate authenticators
+	AuthConfig MasterAuthConfig
+
 	// CORSAllowedOrigins
 	CORSAllowedOrigins []string
 
@@ -322,6 +398,32 @@ type MasterConfig struct {
 
 	// AuditConfig holds information related to auditing capabilities.
 	AuditConfig AuditConfig
+
+	// EnableTemplateServiceBroker is a temporary switch which enables TemplateServiceBroker.
+	EnableTemplateServiceBroker bool
+}
+
+// MasterAuthConfig configures authentication options in addition to the standard
+// oauth token and client certificate authenticators
+type MasterAuthConfig struct {
+	// RequestHeader holds options for setting up a front proxy against the the API.  It is optional.
+	RequestHeader *RequestHeaderAuthenticationOptions
+}
+
+// RequestHeaderAuthenticationOptions provides options for setting up a front proxy against the entire
+// API instead of against the /oauth endpoint.
+type RequestHeaderAuthenticationOptions struct {
+	// ClientCA is a file with the trusted signer certs.  It is required.
+	ClientCA string
+	// ClientCommonNames is a required list of common names to require a match from.
+	ClientCommonNames []string
+
+	// UsernameHeaders is the list of headers to check for user information.  First hit wins.
+	UsernameHeaders []string
+	// GroupNameHeader is the set of headers to check for group information.  All are unioned.
+	GroupHeaders []string
+	// ExtraHeaderPrefixes is the set of request header prefixes to inspect for user extra. X-Remote-Extra- is suggested.
+	ExtraHeaderPrefixes []string
 }
 
 // AuditConfig holds configuration for the audit capabilities
@@ -370,6 +472,28 @@ type ImagePolicyConfig struct {
 	// MaxScheduledImageImportsPerMinute is the maximum number of image streams that will be imported in the background per minute.
 	// The default value is 60. Set to -1 for unlimited.
 	MaxScheduledImageImportsPerMinute int
+	// AllowedRegistriesForImport limits the docker registries that normal users may import
+	// images from. Set this list to the registries that you trust to contain valid Docker
+	// images and that you want applications to be able to import from. Users with
+	// permission to create Images or ImageStreamMappings via the API are not affected by
+	// this policy - typically only administrators or system integrations will have those
+	// permissions.
+	AllowedRegistriesForImport *AllowedRegistries
+}
+
+// AllowedRegistries represents a list of registries allowed for the image import.
+type AllowedRegistries []RegistryLocation
+
+// RegistryLocation contains a location of the registry specified by the registry domain
+// name. The domain name might include wildcards, like '*' or '??'.
+type RegistryLocation struct {
+	// DomainName specifies a domain name for the registry
+	// In case the registry use non-standard (80 or 443) port, the port should be included
+	// in the domain name as well.
+	DomainName string
+	// Insecure indicates whether the registry is secure (https) or insecure (http)
+	// By default (if not specified) the registry is assumed as secure.
+	Insecure bool
 }
 
 type ProjectConfig struct {
@@ -541,6 +665,12 @@ type ServingInfo struct {
 	ClientCA string
 	// NamedCertificates is a list of certificates to use to secure requests to specific hostnames
 	NamedCertificates []NamedCertificate
+	// MinTLSVersion is the minimum TLS version supported.
+	// Values must match version names from https://golang.org/pkg/crypto/tls/#pkg-constants
+	MinTLSVersion string
+	// CipherSuites contains an overridden list of ciphers for the server to support.
+	// Values must match cipher suite IDs from https://golang.org/pkg/crypto/tls/#pkg-constants
+	CipherSuites []string
 }
 
 // NamedCertificate specifies a certificate/key, and the names it should be served for

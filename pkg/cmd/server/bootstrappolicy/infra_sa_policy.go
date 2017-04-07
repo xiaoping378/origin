@@ -7,12 +7,14 @@ import (
 	"k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
 	"k8s.io/kubernetes/pkg/apis/batch"
+	"k8s.io/kubernetes/pkg/apis/certificates"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/util/sets"
 
 	authorizationapi "github.com/openshift/origin/pkg/authorization/api"
+	buildapi "github.com/openshift/origin/pkg/build/api"
 )
 
 const (
@@ -64,9 +66,11 @@ const (
 	InfraServiceLoadBalancerControllerServiceAccountName = "service-load-balancer-controller"
 	ServiceLoadBalancerControllerRoleName                = "system:service-load-balancer-controller"
 
-	// TODO can we just rename these or how do we handle upgrades?
-	InfraPetSetControllerServiceAccountName = "pet-set-controller"
-	PetSetControllerRoleName                = "system:pet-set-controller"
+	InfraStatefulSetControllerServiceAccountName = "statefulset-controller"
+	StatefulSetControllerRoleName                = "system:statefulset-controller"
+
+	InfraCertificateSigningControllerServiceAccountName = "certificate-signing-controller"
+	CertificateSigningControllerRoleName                = "system:certificate-signing-controller"
 
 	InfraUnidlingControllerServiceAccountName = "unidling-controller"
 	UnidlingControllerRoleName                = "system:unidling-controller"
@@ -79,6 +83,9 @@ const (
 
 	InfraServiceIngressIPControllerServiceAccountName = "service-ingress-ip-controller"
 	ServiceIngressIPControllerRoleName                = "system:service-ingress-ip-controller"
+
+	InfraNodeBootstrapServiceAccountName = "node-bootstrapper"
+	NodeBootstrapRoleName                = "system:node-bootstrapper"
 )
 
 type InfraServiceAccounts struct {
@@ -99,6 +106,10 @@ func (r *InfraServiceAccounts) addServiceAccount(saName string, role authorizati
 		}
 	}
 
+	if role.Annotations == nil {
+		role.Annotations = map[string]string{}
+	}
+	role.Annotations[roleSystemOnly] = roleIsSystemOnly
 	r.saToRole[saName] = role
 	r.serviceAccounts.Insert(saName)
 	return nil
@@ -148,6 +159,7 @@ func init() {
 				{
 					Verbs:     sets.NewString("create"),
 					Resources: sets.NewString("builds/docker", "builds/source", "builds/custom", "builds/jenkinspipeline"),
+					APIGroups: []string{buildapi.GroupName, buildapi.LegacyGroupName},
 				},
 				// BuildController.ImageStreamClient (ControllerClient)
 				{
@@ -735,7 +747,11 @@ func init() {
 					Verbs:     sets.NewString("list", "watch"),
 					Resources: sets.NewString("replicationcontrollers"),
 				},
-				// DisruptionBudgetController.dStore.ListWatch
+				{
+					APIGroups: []string{apps.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("statefulsets"),
+				},
 				{
 					APIGroups: []string{policy.GroupName},
 					Verbs:     sets.NewString("get", "list", "watch"),
@@ -863,10 +879,10 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
-		InfraPetSetControllerServiceAccountName,
+		InfraStatefulSetControllerServiceAccountName,
 		authorizationapi.ClusterRole{
 			ObjectMeta: kapi.ObjectMeta{
-				Name: PetSetControllerRoleName,
+				Name: StatefulSetControllerRoleName,
 			},
 			Rules: []authorizationapi.PolicyRule{
 				// StatefulSetController.podCache.ListWatch
@@ -879,19 +895,18 @@ func init() {
 				{
 					APIGroups: []string{apps.GroupName},
 					Verbs:     sets.NewString("list", "watch"),
-					Resources: sets.NewString("petsets", "statefulsets"),
+					Resources: sets.NewString("statefulsets"),
 				},
-				// TODO/REBASE reconcile who uses what (kubeClient vs petClient)
 				// StatefulSetController.petClient
 				{
 					APIGroups: []string{apps.GroupName},
 					Verbs:     sets.NewString("get"),
-					Resources: sets.NewString("petsets", "statefulsets"),
+					Resources: sets.NewString("statefulsets"),
 				},
 				{
 					APIGroups: []string{apps.GroupName},
 					Verbs:     sets.NewString("update"),
-					Resources: sets.NewString("petsets/status", "petsets/status"),
+					Resources: sets.NewString("statefulsets/status"),
 				},
 				// StatefulSetController.podClient
 				{
@@ -900,7 +915,7 @@ func init() {
 					Resources: sets.NewString("pods"),
 				},
 				// StatefulSetController.petClient (PVC)
-				// This is an escalating client and we must admission check the petset
+				// This is an escalating client and we must admission check the statefulset
 				{
 					APIGroups: []string{kapi.GroupName},
 					Verbs:     sets.NewString("get", "create"), // future "delete"
@@ -993,6 +1008,30 @@ func init() {
 	}
 
 	err = InfraSAs.addServiceAccount(
+		InfraCertificateSigningControllerServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: kapi.ObjectMeta{
+				Name: CertificateSigningControllerRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("list", "watch"),
+					Resources: sets.NewString("certificatesigningrequests"),
+				},
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("update"),
+					Resources: sets.NewString("certificatesigningrequests/status", "certificatesigningrequests/approval"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	err = InfraSAs.addServiceAccount(
 		InfraEndpointControllerServiceAccountName,
 		authorizationapi.ClusterRole{
 			ObjectMeta: kapi.ObjectMeta{
@@ -1061,4 +1100,22 @@ func init() {
 		panic(err)
 	}
 
+	err = InfraSAs.addServiceAccount(
+		InfraNodeBootstrapServiceAccountName,
+		authorizationapi.ClusterRole{
+			ObjectMeta: kapi.ObjectMeta{
+				Name: NodeBootstrapRoleName,
+			},
+			Rules: []authorizationapi.PolicyRule{
+				{
+					APIGroups: []string{certificates.GroupName},
+					Verbs:     sets.NewString("create", "get"),
+					Resources: sets.NewString("certificatesigningrequests"),
+				},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 }

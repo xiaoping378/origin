@@ -3,10 +3,10 @@
 source "$(dirname "${BASH_SOURCE}")/lib/init.sh"
 trap os::test::junit::reconcile_output EXIT
 
-BASETMPDIR="${TMPDIR:-/tmp}/openshift/test-tools"
-JUNIT_REPORT_OUTPUT="${BASETMPDIR}/junit_output.txt"
-mkdir -p "${BASETMPDIR}"
-touch "${JUNIT_REPORT_OUTPUT}"
+os::cleanup::tmpdir
+os::util::environment::setup_all_server_vars
+export HOME="${FAKE_HOME_DIR}"
+export JUNIT_REPORT_OUTPUT="${LOG_DIR}/raw_test_output.log"
 
 # set verbosity so we can see that command output renders correctly
 VERBOSE=1

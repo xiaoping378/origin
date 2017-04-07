@@ -29,11 +29,29 @@ type NodeConfig struct {
 	// MasterClientConnectionOverrides provides overrides to the client connection used to connect to the master.
 	MasterClientConnectionOverrides *ClientConnectionOverrides `json:"masterClientConnectionOverrides"`
 
-	// DNSDomain holds the domain suffix
+	// DNSDomain holds the domain suffix that will be used for the DNS search path inside each container. Defaults to
+	// 'cluster.local'.
 	DNSDomain string `json:"dnsDomain"`
 
-	// DNSIP holds the IP
+	// DNSIP is the IP address that pods will use to access cluster DNS. Defaults to the service IP of the Kubernetes
+	// master. This IP must be listening on port 53 for compatibility with libc resolvers (which cannot be configured
+	// to resolve names from any other port). When running more complex local DNS configurations, this is often set
+	// to the local address of a DNS proxy like dnsmasq, which then will consult either the local DNS (see
+	// dnsBindAddress) or the master DNS.
 	DNSIP string `json:"dnsIP"`
+
+	// DNSBindAddress is the ip:port to serve DNS on. If this is not set, the DNS server will not be started.
+	// Because most DNS resolvers will only listen on port 53, if you select an alternative port you will need
+	// a DNS proxy like dnsmasq to answer queries for containers. A common configuration is dnsmasq configured
+	// on a node IP listening on 53 and delegating queries for dnsDomain to this process, while sending other
+	// queries to the host environments nameservers.
+	DNSBindAddress string `json:"dnsBindAddress"`
+
+	// DNSNameservers is a list of ip:port values of recursive nameservers to forward queries to when running
+	// a local DNS server if dnsBindAddress is set. If this value is empty, the DNS server will default to
+	// the nameservers listed in /etc/resolv.conf. If you have configured dnsmasq or another DNS proxy on the
+	// system, this value should be set to the upstream nameservers dnsmasq resolves with.
+	DNSNameservers []string `json:"dnsNameservers"`
 
 	// Deprecated and maintained for backward compatibility, use NetworkConfig.NetworkPluginName instead
 	DeprecatedNetworkPluginName string `json:"networkPluginName,omitempty"`
@@ -156,6 +174,10 @@ type MasterConfig struct {
 	// ServingInfo describes how to start serving
 	ServingInfo HTTPServingInfo `json:"servingInfo"`
 
+	// AuthConfig configures authentication options in addition to the standard
+	// oauth token and client certificate authenticators
+	AuthConfig MasterAuthConfig `json:"authConfig"`
+
 	// CORSAllowedOrigins
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins"`
 
@@ -244,6 +266,32 @@ type MasterConfig struct {
 
 	// AuditConfig holds information related to auditing capabilities.
 	AuditConfig AuditConfig `json:"auditConfig"`
+
+	// EnableTemplateServiceBroker is a temporary switch which enables TemplateServiceBroker.
+	EnableTemplateServiceBroker bool `json:"enableTemplateServiceBroker"`
+}
+
+// MasterAuthConfig configures authentication options in addition to the standard
+// oauth token and client certificate authenticators
+type MasterAuthConfig struct {
+	// RequestHeader holds options for setting up a front proxy against the the API.  It is optional.
+	RequestHeader *RequestHeaderAuthenticationOptions `json:"requestHeader"`
+}
+
+// RequestHeaderAuthenticationOptions provides options for setting up a front proxy against the entire
+// API instead of against the /oauth endpoint.
+type RequestHeaderAuthenticationOptions struct {
+	// ClientCA is a file with the trusted signer certs.  It is required.
+	ClientCA string `json:"clientCA"`
+	// ClientCommonNames is a required list of common names to require a match from.
+	ClientCommonNames []string `json:"clientCommonNames"`
+
+	// UsernameHeaders is the list of headers to check for user information.  First hit wins.
+	UsernameHeaders []string `json:"usernameHeaders"`
+	// GroupNameHeader is the set of headers to check for group information.  All are unioned.
+	GroupHeaders []string `json:"groupHeaders"`
+	// ExtraHeaderPrefixes is the set of request header prefixes to inspect for user extra. X-Remote-Extra- is suggested.
+	ExtraHeaderPrefixes []string `json:"extraHeaderPrefixes"`
 }
 
 // AuditConfig holds configuration for the audit capabilities
@@ -293,6 +341,28 @@ type ImagePolicyConfig struct {
 	// MaxScheduledImageImportsPerMinute is the maximum number of scheduled image streams that will be imported in the
 	// background per minute. The default value is 60. Set to -1 for unlimited.
 	MaxScheduledImageImportsPerMinute int `json:"maxScheduledImageImportsPerMinute"`
+	// AllowedRegistriesForImport limits the docker registries that normal users may import
+	// images from. Set this list to the registries that you trust to contain valid Docker
+	// images and that you want applications to be able to import from. Users with
+	// permission to create Images or ImageStreamMappings via the API are not affected by
+	// this policy - typically only administrators or system integrations will have those
+	// permissions.
+	AllowedRegistriesForImport *AllowedRegistries `json:"allowedRegistriesForImport,omitempty"`
+}
+
+// AllowedRegistries represents a list of registries allowed for the image import.
+type AllowedRegistries []RegistryLocation
+
+// RegistryLocation contains a location of the registry specified by the registry domain
+// name. The domain name might include wildcards, like '*' or '??'.
+type RegistryLocation struct {
+	// DomainName specifies a domain name for the registry
+	// In case the registry use non-standard (80 or 443) port, the port should be included
+	// in the domain name as well.
+	DomainName string `json:"domainName"`
+	// Insecure indicates whether the registry is secure (https) or insecure (http)
+	// By default (if not specified) the registry is assumed as secure.
+	Insecure bool `json:"insecure,omitempty"`
 }
 
 //  holds the necessary configuration options for
@@ -493,6 +563,12 @@ type ServingInfo struct {
 	ClientCA string `json:"clientCA"`
 	// NamedCertificates is a list of certificates to use to secure requests to specific hostnames
 	NamedCertificates []NamedCertificate `json:"namedCertificates"`
+	// MinTLSVersion is the minimum TLS version supported.
+	// Values must match version names from https://golang.org/pkg/crypto/tls/#pkg-constants
+	MinTLSVersion string `json:"minTLSVersion,omitempty"`
+	// CipherSuites contains an overridden list of ciphers for the server to support.
+	// Values must match cipher suite IDs from https://golang.org/pkg/crypto/tls/#pkg-constants
+	CipherSuites []string `json:"cipherSuites,omitempty"`
 }
 
 // NamedCertificate specifies a certificate/key, and the names it should be served for

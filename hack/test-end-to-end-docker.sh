@@ -10,7 +10,14 @@ os::log::info "Starting containerized end-to-end test"
 unset KUBECONFIG
 
 os::util::environment::use_sudo
-os::util::environment::setup_all_server_vars "test-end-to-end-docker/"
+os::cleanup::tmpdir
+os::util::environment::setup_all_server_vars
+export HOME="${FAKE_HOME_DIR}"
+
+# Allow setting $JUNIT_REPORT to toggle output behavior
+if [[ -n "${JUNIT_REPORT:-}" ]]; then
+	export JUNIT_REPORT_OUTPUT="${LOG_DIR}/raw_test_output.log"
+fi
 
 function cleanup()
 {
@@ -24,11 +31,11 @@ function cleanup()
 	echo
 
 	set +e
-	dump_container_logs
+	os::cleanup::dump_container_logs
 
 	# pull information out of the server log so that we can get failure management in jenkins to highlight it and
 	# really have it smack people in their logs.  This is a severe correctness problem
-    grep -a5 "CACHE.*ALTERED" ${LOG_DIR}/container-origin.log
+    grep -ra5 "CACHE.*ALTERED" ${LOG_DIR}/containers
 
 	os::cleanup::dump_etcd
 
@@ -37,18 +44,19 @@ function cleanup()
 		docker stop origin
 		docker rm origin
 
-		os::log::info "Stopping k8s docker containers"; docker ps | awk 'index($NF,"k8s_")==1 { print $1 }' | xargs -l -r docker stop
-		if [[ -z "${SKIP_IMAGE_CLEANUP-}" ]]; then
-			os::log::info "Removing k8s docker containers"; docker ps -a | awk 'index($NF,"k8s_")==1 { print $1 }' | xargs -l -r docker rm
-		fi
+		os::cleanup::containers
 		set -u
 	fi
 
 	journalctl --unit docker.service --since -15minutes > "${LOG_DIR}/docker.log"
 
-	delete_empty_logs
 	truncate_large_logs
+	os::test::junit::generate_oscmd_report
 	set -e
+
+	# restore journald to previous form
+	${USE_SUDO:+sudo} mv /etc/systemd/{journald.conf.bak,journald.conf}
+	${USE_SUDO:+sudo} systemctl restart systemd-journald.service
 
 	os::log::info "Exiting"
 	ENDTIME=$(date +%s); echo "$0 took $(($ENDTIME - $STARTTIME)) seconds"
@@ -58,6 +66,13 @@ function cleanup()
 trap "cleanup" EXIT INT TERM
 
 os::log::system::start
+
+# This increases rate limits in journald to bypass the problem from
+# https://github.com/openshift/origin/issues/12558.
+${USE_SUDO:+sudo} cp /etc/systemd/{journald.conf,journald.conf.bak}
+os::util::sed "s/^.*RateLimitInterval.*$/RateLimitInterval=1s/g" /etc/systemd/journald.conf
+os::util::sed "s/^.*RateLimitBurst.*$/RateLimitBurst=10000/g" /etc/systemd/journald.conf
+${USE_SUDO:+sudo} systemctl restart systemd-journald.service
 
 out=$(
 	set +e

@@ -9,6 +9,7 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/errors"
 
+	"github.com/openshift/origin/pkg/api/latest"
 	"github.com/openshift/origin/pkg/client"
 	"github.com/openshift/origin/pkg/generate/app"
 	"github.com/openshift/origin/pkg/template"
@@ -37,12 +38,23 @@ func TransformTemplate(tpl *templateapi.Template, client client.TemplateConfigsN
 
 	// ensure the template objects are decoded
 	// TODO: in the future, this should be more automatic
-	if errs := runtime.DecodeList(result.Objects, kapi.Codecs.UniversalDecoder()); len(errs) > 0 {
+	// TODO: this should use the UniversalDecoder() once we deprecate legacy group. Until
+	// then we have to maintain the backward compatibility with old servers so this will
+	// force to decode the list as legacy/core API.
+	if errs := runtime.DecodeList(result.Objects, kapi.Codecs.LegacyCodec(latest.Version)); len(errs) > 0 {
 		err = errors.NewAggregate(errs)
 		return nil, fmt.Errorf("error processing template %q: %v", name, err)
 	}
 
 	return result, nil
+}
+
+func formatString(out io.Writer, tab, s string) {
+	labelVals := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+
+	for _, lval := range labelVals {
+		fmt.Fprintf(out, fmt.Sprintf("%s%s\n", tab, lval))
+	}
 }
 
 // DescribeGeneratedTemplate writes a description of the provided template to out.
@@ -64,11 +76,11 @@ func DescribeGeneratedTemplate(out io.Writer, input string, result *templateapi.
 		fmt.Fprintf(out, "     %s\n", name)
 		fmt.Fprintf(out, "     ---------\n")
 		if len(description) > 0 {
-			fmt.Fprintf(out, "     %s\n", description)
+			formatString(out, "     ", description)
 			fmt.Fprintln(out)
 		}
 		if len(message) > 0 {
-			fmt.Fprintf(out, "     %s\n", message)
+			formatString(out, "     ", message)
 			fmt.Fprintln(out)
 		}
 	}

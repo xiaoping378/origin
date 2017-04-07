@@ -44,9 +44,15 @@ var recommendedCreatableResources = map[unversioned.GroupResource]bool{
 	authorizationapi.Resource("localsubjectaccessreviews"):  true,
 	authorizationapi.Resource("selfsubjectrulesreviews"):    true,
 	authorizationapi.Resource("subjectrulesreviews"):        true,
+
+	authorizationapi.LegacyResource("resourceaccessreviews"):      true,
+	authorizationapi.LegacyResource("localresourceaccessreviews"): true,
+	authorizationapi.LegacyResource("subjectaccessreviews"):       true,
+	authorizationapi.LegacyResource("localsubjectaccessreviews"):  true,
+	authorizationapi.LegacyResource("selfsubjectrulesreviews"):    true,
+	authorizationapi.LegacyResource("subjectrulesreviews"):        true,
 }
 var _ = oadmission.WantsProjectCache(&lifecycle{})
-var _ = oadmission.Validator(&lifecycle{})
 
 // Admit enforces that a namespace must have the openshift finalizer associated with it in order to create origin API objects within it
 func (e *lifecycle) Admit(a admission.Attributes) (err error) {

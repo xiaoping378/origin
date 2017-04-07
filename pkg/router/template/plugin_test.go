@@ -204,6 +204,11 @@ func (r *TestRouter) HasRoute(route *routeapi.Route) bool {
 	return false
 }
 
+func (r *TestRouter) SyncedAtLeastOnce() bool {
+	// Not used
+	return false
+}
+
 func (r *TestRouter) FilterNamespaces(namespaces sets.String) {
 	if len(namespaces) == 0 {
 		r.State = make(map[string]ServiceAliasConfig)
@@ -263,7 +268,7 @@ func TestHandleEndpoints(t *testing.T) {
 				Name: "foo/test", //service name from kapi.endpoints object
 				EndpointTable: []Endpoint{
 					{
-						ID:   "1.1.1.1:345",
+						ID:   "ept:test:1.1.1.1:345",
 						IP:   "1.1.1.1",
 						Port: "345",
 					},
@@ -279,7 +284,7 @@ func TestHandleEndpoints(t *testing.T) {
 					Name:      "test",
 				},
 				Subsets: []kapi.EndpointSubset{{
-					Addresses: []kapi.EndpointAddress{{IP: "2.2.2.2"}},
+					Addresses: []kapi.EndpointAddress{{IP: "2.2.2.2", TargetRef: &kapi.ObjectReference{Kind: "Pod", Name: "pod-1"}}},
 					Ports:     []kapi.EndpointPort{{Port: 8080}},
 				}},
 			},
@@ -287,7 +292,7 @@ func TestHandleEndpoints(t *testing.T) {
 				Name: "foo/test",
 				EndpointTable: []Endpoint{
 					{
-						ID:   "2.2.2.2:8080",
+						ID:   "pod:pod-1:test:2.2.2.2:8080",
 						IP:   "2.2.2.2",
 						Port: "8080",
 					},
@@ -318,7 +323,7 @@ func TestHandleEndpoints(t *testing.T) {
 	templatePlugin := newDefaultTemplatePlugin(router, true, nil)
 	// TODO: move tests that rely on unique hosts to pkg/router/controller and remove them from
 	// here
-	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, controller.LogRejections)
+	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, false, controller.LogRejections)
 
 	for _, tc := range testCases {
 		plugin.HandleEndpoints(tc.eventType, tc.endpoints)
@@ -359,7 +364,7 @@ func TestHandleTCPEndpoints(t *testing.T) {
 					Name:      "test", //kapi.endpoints inherits the name of the service
 				},
 				Subsets: []kapi.EndpointSubset{{
-					Addresses: []kapi.EndpointAddress{{IP: "1.1.1.1"}},
+					Addresses: []kapi.EndpointAddress{{IP: "1.1.1.1", TargetRef: &kapi.ObjectReference{Kind: "Pod", Name: "pod-1"}}},
 					Ports: []kapi.EndpointPort{
 						{Port: 345},
 						{Port: 346, Protocol: kapi.ProtocolUDP},
@@ -370,7 +375,7 @@ func TestHandleTCPEndpoints(t *testing.T) {
 				Name: "foo/test", //service name from kapi.endpoints object
 				EndpointTable: []Endpoint{
 					{
-						ID:   "1.1.1.1:345",
+						ID:   "pod:pod-1:test:1.1.1.1:345",
 						IP:   "1.1.1.1",
 						Port: "345",
 					},
@@ -397,7 +402,7 @@ func TestHandleTCPEndpoints(t *testing.T) {
 				Name: "foo/test",
 				EndpointTable: []Endpoint{
 					{
-						ID:   "2.2.2.2:8080",
+						ID:   "ept:test:2.2.2.2:8080",
 						IP:   "2.2.2.2",
 						Port: "8080",
 					},
@@ -428,7 +433,7 @@ func TestHandleTCPEndpoints(t *testing.T) {
 	templatePlugin := newDefaultTemplatePlugin(router, false, nil)
 	// TODO: move tests that rely on unique hosts to pkg/router/controller and remove them from
 	// here
-	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, controller.LogRejections)
+	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, false, controller.LogRejections)
 
 	for _, tc := range testCases {
 		plugin.HandleEndpoints(tc.eventType, tc.endpoints)
@@ -470,7 +475,7 @@ func TestHandleRoute(t *testing.T) {
 	templatePlugin := newDefaultTemplatePlugin(router, true, nil)
 	// TODO: move tests that rely on unique hosts to pkg/router/controller and remove them from
 	// here
-	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, rejections)
+	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, false, rejections)
 
 	original := unversioned.Time{Time: time.Now()}
 
@@ -639,7 +644,7 @@ func TestHandleRouteExtendedValidation(t *testing.T) {
 	// TODO: move tests that rely on unique hosts to pkg/router/controller and remove them from
 	// here
 	extendedValidatorPlugin := controller.NewExtendedValidator(templatePlugin, rejections)
-	plugin := controller.NewUniqueHost(extendedValidatorPlugin, controller.HostForRoute, rejections)
+	plugin := controller.NewUniqueHost(extendedValidatorPlugin, controller.HostForRoute, false, rejections)
 
 	original := unversioned.Time{Time: time.Now()}
 
@@ -987,7 +992,7 @@ func TestNamespaceScopingFromEmpty(t *testing.T) {
 	templatePlugin := newDefaultTemplatePlugin(router, true, nil)
 	// TODO: move tests that rely on unique hosts to pkg/router/controller and remove them from
 	// here
-	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, controller.LogRejections)
+	plugin := controller.NewUniqueHost(templatePlugin, controller.HostForRoute, false, controller.LogRejections)
 
 	// no namespaces allowed
 	plugin.HandleNamespaces(sets.String{})

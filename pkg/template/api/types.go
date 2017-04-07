@@ -26,6 +26,11 @@ type Template struct {
 	Parameters []Parameter
 
 	// objects is an array of resources to include in this template.
+	// If a namespace value is hardcoded in the object, it will be removed
+	// during template instantiation, however if the namespace value
+	// is, or contains, a ${PARAMETER_REFERENCE}, the resolved
+	// value after parameter substitution will be respected and the object
+	// will be created in that namespace.
 	Objects []runtime.Object
 
 	// objectLabels is an optional set of labels that are applied to every
@@ -71,8 +76,122 @@ type Parameter struct {
 	Required bool
 }
 
-// These constants represent annotations keys affixed to templates
+// +genclient=true
+
+// TemplateInstance requests and records the instantiation of a Template.
+// TemplateInstance is part of an experimental API.
+type TemplateInstance struct {
+	unversioned.TypeMeta
+	kapi.ObjectMeta
+
+	// Spec describes the desired state of this TemplateInstance.
+	Spec TemplateInstanceSpec
+
+	// Status describes the current state of this TemplateInstance.
+	Status TemplateInstanceStatus
+}
+
+// TemplateInstanceSpec describes the desired state of a TemplateInstance.
+type TemplateInstanceSpec struct {
+	// Template is a full copy of the template for instantiation.
+	Template Template
+
+	// Secret is a reference to a Secret object containing the necessary
+	// template parameters.
+	Secret kapi.LocalObjectReference
+
+	// Requester holds the identity of the agent requesting the template
+	// instantiation.
+	Requester *TemplateInstanceRequester
+}
+
+// TemplateInstanceRequester holds the identity of an agent requesting a
+// template instantiation.
+type TemplateInstanceRequester struct {
+	// Username is the username of the agent requesting a template instantiation.
+	Username string
+}
+
+// TemplateInstanceStatus describes the current state of a TemplateInstance.
+type TemplateInstanceStatus struct {
+	// Conditions represent the latest available observations of a
+	// TemplateInstance's current state.
+	Conditions []TemplateInstanceCondition
+}
+
+// TemplateInstanceCondition contains condition information for a
+// TemplateInstance.
+type TemplateInstanceCondition struct {
+	// Type of the condition, currently Ready or InstantiateFailure.
+	Type TemplateInstanceConditionType
+	// Status of the condition, one of True, False or Unknown.
+	Status kapi.ConditionStatus
+	// LastTransitionTime is the last time a condition status transitioned from
+	// one state to another.
+	LastTransitionTime unversioned.Time
+	// Reason is a brief machine readable explanation for the condition's last
+	// transition.
+	Reason string
+	// Message is a human readable description of the details of the last
+	// transition, complementing reason.
+	Message string
+}
+
+// TemplateInstanceConditionType is the type of condition pertaining to a
+// TemplateInstance.
+type TemplateInstanceConditionType string
+
 const (
-	// TemplateDisplayName is an optional annotation that stores the name displayed by a UI when referencing a template.
-	TemplateDisplayName = "openshift.io/display-name"
+	// TemplateInstanceReady indicates the readiness of the template
+	// instantiation.
+	TemplateInstanceReady TemplateInstanceConditionType = "Ready"
+	// TemplateInstanceInstantiateFailure indicates the failure of the template
+	// instantiation
+	TemplateInstanceInstantiateFailure TemplateInstanceConditionType = "InstantiateFailure"
 )
+
+// TemplateInstanceList is a list of TemplateInstance objects.
+type TemplateInstanceList struct {
+	unversioned.TypeMeta
+	unversioned.ListMeta
+
+	// Items is a list of Templateinstances
+	Items []TemplateInstance
+}
+
+// +genclient=true
+// +nonNamespaced=true
+
+// BrokerTemplateInstance holds the service broker-related state associated with
+// a TemplateInstance.  BrokerTemplateInstance is part of an experimental API.
+type BrokerTemplateInstance struct {
+	unversioned.TypeMeta
+	kapi.ObjectMeta
+
+	// Spec describes the state of this BrokerTemplateInstance.
+	Spec BrokerTemplateInstanceSpec
+}
+
+// BrokerTemplateInstanceSpec describes the state of a BrokerTemplateInstance.
+type BrokerTemplateInstanceSpec struct {
+	// TemplateInstance is a reference to a TemplateInstance object residing
+	// in a namespace.
+	TemplateInstance kapi.ObjectReference
+
+	// Secret is a reference to a Secret object residing in a namespace,
+	// containing the necessary template parameters.
+	Secret kapi.ObjectReference
+
+	// BindingIDs is a list of 'binding_id's provided during successive bind
+	// calls to the template service broker.
+	BindingIDs []string
+}
+
+// BrokerTemplateInstanceList is a list of BrokerTemplateInstance objects.
+type BrokerTemplateInstanceList struct {
+	unversioned.TypeMeta
+	unversioned.ListMeta
+
+	// Items is a list of BrokerTemplateInstances
+	Items []BrokerTemplateInstance
+}

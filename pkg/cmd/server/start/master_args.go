@@ -242,6 +242,17 @@ func (args MasterArgs) BuildSerializeableMasterConfig() (*configapi.MasterConfig
 			Latest: args.ImageFormatArgs.ImageTemplate.Latest,
 		},
 
+		// List public registries that we are allowing to import images from by default.
+		// By default all registries have set to be "secure", iow. the port for them is
+		// defaulted to "443".
+		// If the registry you are adding here is insecure, you can add 'Insecure: true' which
+		// in that case it will default to port '80'.
+		// If the registry you are adding use custom port, you have to specify the port as
+		// part of the domain name.
+		ImagePolicyConfig: configapi.ImagePolicyConfig{
+			AllowedRegistriesForImport: configapi.DefaultAllowedRegistriesForImport,
+		},
+
 		ProjectConfig: configapi.ProjectConfig{
 			DefaultNodeSelector:    "",
 			ProjectRequestMessage:  "",
@@ -347,13 +358,13 @@ func (args MasterArgs) BuildSerializeableMasterConfig() (*configapi.MasterConfig
 
 	// Default storage backend to etcd3 with protobuf storage for our innate config when starting both
 	// Kubernetes and etcd.
-	// if km := config.KubernetesMasterConfig; km != nil && config.EtcdConfig != nil {
-	// 	if len(km.APIServerArguments) == 0 {
-	// 		km.APIServerArguments = configapi.ExtendedArguments{}
-	// 		km.APIServerArguments["storage-media-type"] = []string{"application/vnd.kubernetes.protobuf"}
-	// 		km.APIServerArguments["storage-backend"] = []string{"etcd3"}
-	// 	}
-	// }
+	if km := config.KubernetesMasterConfig; km != nil && config.EtcdConfig != nil {
+		if len(km.APIServerArguments) == 0 {
+			km.APIServerArguments = configapi.ExtendedArguments{}
+			km.APIServerArguments["storage-media-type"] = []string{"application/vnd.kubernetes.protobuf"}
+			km.APIServerArguments["storage-backend"] = []string{"etcd3"}
+		}
+	}
 
 	return config, nil
 }
@@ -469,15 +480,18 @@ func (args MasterArgs) BuildSerializeableKubeMasterConfig() (*configapi.Kubernet
 
 func (args MasterArgs) Validate() error {
 	masterAddr, err := args.GetMasterAddress()
-	if addr, err := masterAddr, err; err != nil {
+	if err != nil {
 		return err
-	} else if len(addr.Path) != 0 {
-		return fmt.Errorf("master url may not include a path: '%v'", addr.Path)
+	}
+	if len(masterAddr.Path) != 0 {
+		return fmt.Errorf("master url may not include a path: '%v'", masterAddr.Path)
 	}
 
-	if addr, err := args.GetMasterPublicAddress(); err != nil {
+	addr, err := args.GetMasterPublicAddress()
+	if err != nil {
 		return err
-	} else if len(addr.Path) != 0 {
+	}
+	if len(addr.Path) != 0 {
 		return fmt.Errorf("master public url may not include a path: '%v'", addr.Path)
 	}
 
@@ -485,9 +499,11 @@ func (args MasterArgs) Validate() error {
 		return err
 	}
 
-	if addr, err := args.KubeConnectionArgs.GetKubernetesAddress(masterAddr); err != nil {
+	addr, err = args.KubeConnectionArgs.GetKubernetesAddress(masterAddr)
+	if err != nil {
 		return err
-	} else if len(addr.Path) != 0 {
+	}
+	if len(addr.Path) != 0 {
 		return fmt.Errorf("kubernetes url may not include a path: '%v'", addr.Path)
 	}
 

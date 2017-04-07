@@ -73,6 +73,8 @@ func (c *AssetConfig) Run() {
 			server.TLSConfig = crypto.SecureTLSConfig(&tls.Config{
 				// Set SNI certificate func
 				GetCertificate: cmdutil.GetCertificateFunc(extraCerts),
+				MinVersion:     crypto.TLSVersionOrDie(c.Options.ServingInfo.MinTLSVersion),
+				CipherSuites:   crypto.CipherSuitesOrDie(c.Options.ServingInfo.CipherSuites),
 			})
 			glog.Infof("Web console listening at https://%s", c.Options.ServingInfo.BindAddress)
 			glog.Fatal(cmdutil.ListenAndServeTLS(server, c.Options.ServingInfo.BindNetwork, c.Options.ServingInfo.ServerCert.CertFile, c.Options.ServingInfo.ServerCert.KeyFile))
@@ -115,6 +117,8 @@ func (c *AssetConfig) buildAssetHandler() (http.Handler, error) {
 	// Cache control should happen after all Vary headers are added, but before
 	// any asset related routing (HTML5ModeHandler and FileServer)
 	handler = assets.CacheControlHandler(oversion.Get().GitCommit, handler)
+
+	handler = assets.SecurityHeadersHandler(handler)
 
 	// Gzip first so that inner handlers can react to the addition of the Vary header
 	handler = assets.GzipHandler(handler)
@@ -235,6 +239,7 @@ func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 	}
 	configPath := path.Join(publicURL.Path, "config.js")
 	configHandler, err := assets.GeneratedConfigHandler(config, versionInfo, extensionProps)
+	configHandler = assets.SecurityHeadersHandler(configHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +248,7 @@ func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 	// Extension scripts
 	extScriptsPath := path.Join(publicURL.Path, "scripts/extensions.js")
 	extScriptsHandler, err := assets.ExtensionScriptsHandler(c.Options.ExtensionScripts, c.Options.ExtensionDevelopment)
+	extScriptsHandler = assets.SecurityHeadersHandler(extScriptsHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +257,7 @@ func (c *AssetConfig) addHandlers(handler http.Handler) (http.Handler, error) {
 	// Extension stylesheets
 	extStylesheetsPath := path.Join(publicURL.Path, "styles/extensions.css")
 	extStylesheetsHandler, err := assets.ExtensionStylesheetsHandler(c.Options.ExtensionStylesheets, c.Options.ExtensionDevelopment)
+	extStylesheetsHandler = assets.SecurityHeadersHandler(extStylesheetsHandler)
 	if err != nil {
 		return nil, err
 	}

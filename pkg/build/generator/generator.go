@@ -32,13 +32,13 @@ type GeneratorFatalError struct {
 }
 
 // Error returns the error string for this fatal error
-func (e GeneratorFatalError) Error() string {
+func (e *GeneratorFatalError) Error() string {
 	return fmt.Sprintf("fatal error generating Build from BuildConfig: %s", e.Reason)
 }
 
 // IsFatal returns true if err is a fatal error
 func IsFatal(err error) bool {
-	_, isFatal := err.(GeneratorFatalError)
+	_, isFatal := err.(*GeneratorFatalError)
 	return isFatal
 }
 
@@ -57,6 +57,7 @@ type GeneratorClient interface {
 	UpdateBuildConfig(ctx kapi.Context, buildConfig *buildapi.BuildConfig) error
 	GetBuild(ctx kapi.Context, name string) (*buildapi.Build, error)
 	CreateBuild(ctx kapi.Context, build *buildapi.Build) error
+	UpdateBuild(ctx kapi.Context, build *buildapi.Build) error
 	GetImageStream(ctx kapi.Context, name string) (*imageapi.ImageStream, error)
 	GetImageStreamImage(ctx kapi.Context, name string) (*imageapi.ImageStreamImage, error)
 	GetImageStreamTag(ctx kapi.Context, name string) (*imageapi.ImageStreamTag, error)
@@ -68,6 +69,7 @@ type Client struct {
 	UpdateBuildConfigFunc   func(ctx kapi.Context, buildConfig *buildapi.BuildConfig) error
 	GetBuildFunc            func(ctx kapi.Context, name string) (*buildapi.Build, error)
 	CreateBuildFunc         func(ctx kapi.Context, build *buildapi.Build) error
+	UpdateBuildFunc         func(ctx kapi.Context, build *buildapi.Build) error
 	GetImageStreamFunc      func(ctx kapi.Context, name string) (*imageapi.ImageStream, error)
 	GetImageStreamImageFunc func(ctx kapi.Context, name string) (*imageapi.ImageStreamImage, error)
 	GetImageStreamTagFunc   func(ctx kapi.Context, name string) (*imageapi.ImageStreamTag, error)
@@ -91,6 +93,11 @@ func (c Client) GetBuild(ctx kapi.Context, name string) (*buildapi.Build, error)
 // CreateBuild creates a new build
 func (c Client) CreateBuild(ctx kapi.Context, build *buildapi.Build) error {
 	return c.CreateBuildFunc(ctx, build)
+}
+
+// UpdateBuild updates a build
+func (c Client) UpdateBuild(ctx kapi.Context, build *buildapi.Build) error {
+	return c.UpdateBuildFunc(ctx, build)
 }
 
 // GetImageStream retrieves a named image stream
@@ -192,6 +199,8 @@ func updateBuildEnv(strategy *buildapi.BuildStrategy, env []kapi.EnvVar) {
 		buildEnv = &strategy.DockerStrategy.Env
 	case strategy.CustomStrategy != nil:
 		buildEnv = &strategy.CustomStrategy.Env
+	case strategy.JenkinsPipelineStrategy != nil:
+		buildEnv = &strategy.JenkinsPipelineStrategy.Env
 	}
 
 	newEnv := []kapi.EnvVar{}
@@ -209,6 +218,29 @@ func updateBuildEnv(strategy *buildapi.BuildStrategy, env []kapi.EnvVar) {
 	}
 	newEnv = append(newEnv, env...)
 	*buildEnv = newEnv
+}
+
+// Adds new Build Args to existing Build Args. Overwrites existing ones
+func updateBuildArgs(oldArgs *[]kapi.EnvVar, newArgs []kapi.EnvVar) []kapi.EnvVar {
+	combined := make(map[string]string)
+
+	// Change oldArgs into a map
+	for _, o := range *oldArgs {
+		combined[o.Name] = o.Value
+	}
+
+	// Add new args, this overwrites old
+	for _, n := range newArgs {
+		combined[n.Name] = n.Value
+	}
+
+	// Change back into an array
+	var result []kapi.EnvVar
+	for k, v := range combined {
+		result = append(result, kapi.EnvVar{Name: k, Value: v})
+	}
+
+	return result
 }
 
 // Instantiate returns a new Build object based on a BuildRequest object
@@ -246,12 +278,25 @@ func (g *BuildGenerator) Instantiate(ctx kapi.Context, request *buildapi.BuildRe
 	// annotations/labels (eg buildname) to get stomped on.
 	newBuild.Annotations = policy.MergeMaps(request.Annotations, newBuild.Annotations)
 	newBuild.Labels = policy.MergeMaps(request.Labels, newBuild.Labels)
-	// Copy build trigger information to the build object.
+
+	// Copy build trigger information and build arguments to the build object.
 	newBuild.Spec.TriggeredBy = request.TriggeredBy
 
 	if len(request.Env) > 0 {
 		updateBuildEnv(&newBuild.Spec.Strategy, request.Env)
 	}
+
+	// Update the Docker build args
+	if request.DockerStrategyOptions != nil {
+		dockerOpts := request.DockerStrategyOptions
+		if dockerOpts.BuildArgs != nil && len(dockerOpts.BuildArgs) > 0 {
+			if newBuild.Spec.Strategy.DockerStrategy == nil {
+				return nil, errors.NewBadRequest(fmt.Sprintf("Cannot specify build args on %s/%s, not a Docker build.", bc.Namespace, bc.ObjectMeta.Name))
+			}
+			newBuild.Spec.Strategy.DockerStrategy.BuildArgs = updateBuildArgs(&newBuild.Spec.Strategy.DockerStrategy.BuildArgs, dockerOpts.BuildArgs)
+		}
+	}
+
 	glog.V(4).Infof("Build %s/%s has been generated from %s/%s BuildConfig", newBuild.Namespace, newBuild.ObjectMeta.Name, bc.Namespace, bc.ObjectMeta.Name)
 
 	// need to update the BuildConfig because LastVersion and possibly
@@ -349,6 +394,21 @@ func (g *BuildGenerator) Clone(ctx kapi.Context, request *buildapi.BuildRequest)
 	// Copy build trigger information to the build object.
 	newBuild.Spec.TriggeredBy = request.TriggeredBy
 
+	if len(request.Env) > 0 {
+		updateBuildEnv(&newBuild.Spec.Strategy, request.Env)
+	}
+
+	// Update the Docker build args
+	if request.DockerStrategyOptions != nil {
+		dockerOpts := request.DockerStrategyOptions
+		if dockerOpts.BuildArgs != nil && len(dockerOpts.BuildArgs) > 0 {
+			if newBuild.Spec.Strategy.DockerStrategy == nil {
+				return nil, errors.NewBadRequest(fmt.Sprintf("Cannot specify build args on %s/%s, not a Docker build.", buildConfig.Namespace, buildConfig.ObjectMeta.Name))
+			}
+			newBuild.Spec.Strategy.DockerStrategy.BuildArgs = updateBuildArgs(&newBuild.Spec.Strategy.DockerStrategy.BuildArgs, dockerOpts.BuildArgs)
+		}
+	}
+
 	// need to update the BuildConfig because LastVersion changed
 	if buildConfig != nil {
 		if err := g.Client.UpdateBuildConfig(ctx, buildConfig); err != nil {
@@ -403,6 +463,14 @@ func (g *BuildGenerator) generateBuildFromConfig(ctx kapi.Context, bc *buildapi.
 		ObjectMeta: kapi.ObjectMeta{
 			Name:   buildName,
 			Labels: bcCopy.Labels,
+			OwnerReferences: []kapi.OwnerReference{
+				{
+					APIVersion: "v1",          // BuildConfig.APIVersion is not populated
+					Kind:       "BuildConfig", // BuildConfig.Kind is not populated
+					Name:       bcCopy.Name,
+					UID:        bcCopy.UID,
+				},
+			},
 		},
 		Status: buildapi.BuildStatus{
 			Phase: buildapi.BuildPhaseNew,
@@ -568,25 +636,48 @@ func (g *BuildGenerator) resolveImageStreamReference(ctx kapi.Context, from kapi
 	glog.V(4).Infof("Resolving ImageStreamReference %s of Kind %s in namespace %s", from.Name, from.Kind, namespace)
 	switch from.Kind {
 	case "ImageStreamImage":
-		imageStreamImage, err := g.Client.GetImageStreamImage(kapi.WithNamespace(ctx, namespace), from.Name)
+		name, id, err := imageapi.ParseImageStreamImageName(from.Name)
 		if err != nil {
 			err = resolveError(from.Kind, namespace, from.Name, err)
 			glog.V(2).Info(err)
 			return "", err
 		}
-		image := imageStreamImage.Image
-		glog.V(4).Infof("Resolved ImageStreamReference %s to image %s with reference %s in namespace %s", from.Name, image.Name, image.DockerImageReference, namespace)
-		return image.DockerImageReference, nil
+		stream, err := g.Client.GetImageStream(kapi.WithNamespace(ctx, namespace), name)
+		if err != nil {
+			err = resolveError(from.Kind, namespace, from.Name, err)
+			glog.V(2).Info(err)
+			return "", err
+		}
+		reference, ok := imageapi.DockerImageReferenceForImage(stream, id)
+		if !ok {
+			err = resolveError(from.Kind, namespace, from.Name, fmt.Errorf("unable to find corresponding tag for image %q", id))
+			glog.V(2).Info(err)
+			return "", err
+		}
+		glog.V(4).Infof("Resolved ImageStreamImage %s to image %q", from.Name, reference)
+		return reference, nil
+
 	case "ImageStreamTag":
-		imageStreamTag, err := g.Client.GetImageStreamTag(kapi.WithNamespace(ctx, namespace), from.Name)
+		name, tag, err := imageapi.ParseImageStreamTagName(from.Name)
 		if err != nil {
 			err = resolveError(from.Kind, namespace, from.Name, err)
 			glog.V(2).Info(err)
 			return "", err
 		}
-		image := imageStreamTag.Image
-		glog.V(4).Infof("Resolved ImageStreamTag %s to image %s with reference %s in namespace %s", from.Name, image.Name, image.DockerImageReference, namespace)
-		return image.DockerImageReference, nil
+		stream, err := g.Client.GetImageStream(kapi.WithNamespace(ctx, namespace), name)
+		if err != nil {
+			err = resolveError(from.Kind, namespace, from.Name, err)
+			glog.V(2).Info(err)
+			return "", err
+		}
+		reference, ok := imageapi.ResolveLatestTaggedImage(stream, tag)
+		if !ok {
+			err = resolveError(from.Kind, namespace, from.Name, fmt.Errorf("unable to find latest tagged image"))
+			glog.V(2).Info(err)
+			return "", err
+		}
+		glog.V(4).Infof("Resolved ImageStreamTag %s to image %q", from.Name, reference)
+		return reference, nil
 	case "DockerImage":
 		return from.Name, nil
 	default:
@@ -665,7 +756,7 @@ func (g *BuildGenerator) resolveImageSecret(ctx kapi.Context, secrets []kapi.Sec
 
 func resolveError(kind string, namespace string, name string, err error) error {
 	msg := fmt.Sprintf("Error resolving %s %s in namespace %s: %v", kind, name, namespace, err)
-	return &errors.StatusError{unversioned.Status{
+	return &errors.StatusError{ErrStatus: unversioned.Status{
 		Status:  unversioned.StatusFailure,
 		Code:    errors.StatusUnprocessableEntity,
 		Reason:  unversioned.StatusReasonInvalid,
@@ -718,9 +809,10 @@ func generateBuildFromBuild(build *buildapi.Build, buildConfig *buildapi.BuildCo
 	newBuild := &buildapi.Build{
 		Spec: buildCopy.Spec,
 		ObjectMeta: kapi.ObjectMeta{
-			Name:        getNextBuildNameFromBuild(buildCopy, buildConfig),
-			Labels:      buildCopy.ObjectMeta.Labels,
-			Annotations: buildCopy.ObjectMeta.Annotations,
+			Name:            getNextBuildNameFromBuild(buildCopy, buildConfig),
+			Labels:          buildCopy.ObjectMeta.Labels,
+			Annotations:     buildCopy.ObjectMeta.Annotations,
+			OwnerReferences: buildCopy.ObjectMeta.OwnerReferences,
 		},
 		Status: buildapi.BuildStatus{
 			Phase:  buildapi.BuildPhaseNew,
@@ -743,6 +835,8 @@ func generateBuildFromBuild(build *buildapi.Build, buildConfig *buildapi.BuildCo
 	// if they exist, Jenkins reporting annotations must be removed when cloning.
 	delete(newBuild.Annotations, buildapi.BuildJenkinsStatusJSONAnnotation)
 	delete(newBuild.Annotations, buildapi.BuildJenkinsLogURLAnnotation)
+	delete(newBuild.Annotations, buildapi.BuildJenkinsConsoleLogURLAnnotation)
+	delete(newBuild.Annotations, buildapi.BuildJenkinsBlueOceanLogURLAnnotation)
 	delete(newBuild.Annotations, buildapi.BuildJenkinsBuildURIAnnotation)
 
 	// remove the BuildPodNameAnnotation for good measure.

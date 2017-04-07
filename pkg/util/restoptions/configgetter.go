@@ -86,14 +86,55 @@ func (g *configRESTOptionsGetter) loadSettings() error {
 	storageConfig.CertFile = g.masterOptions.EtcdClientInfo.ClientCert.CertFile
 	storageConfig.CAFile = g.masterOptions.EtcdClientInfo.CA
 
+	resourceEncodingConfig := genericapiserver.NewDefaultResourceEncodingConfig()
+
 	storageFactory, err := genericapiserver.BuildDefaultStorageFactory(
-		storageConfig, options.GenericServerRunOptions.DefaultStorageMediaType, kapi.Codecs,
-		genericapiserver.NewDefaultResourceEncodingConfig(), storageGroupsToEncodingVersion,
+		storageConfig,
+		options.GenericServerRunOptions.DefaultStorageMediaType,
+		kapi.Codecs,
+		resourceEncodingConfig,
+		storageGroupsToEncodingVersion,
 		nil,
-		g.defaultResourceConfig, options.GenericServerRunOptions.RuntimeConfig)
+		g.defaultResourceConfig,
+		options.GenericServerRunOptions.RuntimeConfig)
 	if err != nil {
 		return err
 	}
+
+	// TODO: the following works, but better make single resource overrides possible in BuildDefaultStorageFactory
+	// instead of being late to the party and patching here:
+
+	// use legacy group name "" for all resources that existed when apigroups were introduced
+	for _, gvr := range []unversioned.GroupVersionResource{
+		{Group: "authorization.openshift.io", Version: "v1", Resource: "clusterpolicybindings"},
+		{Group: "authorization.openshift.io", Version: "v1", Resource: "clusterpolicies"},
+		{Group: "authorization.openshift.io", Version: "v1", Resource: "policybindings"},
+		{Group: "authorization.openshift.io", Version: "v1", Resource: "rolebindingrestrictions"},
+		{Group: "authorization.openshift.io", Version: "v1", Resource: "policies"},
+		{Group: "build.openshift.io", Version: "v1", Resource: "builds"},
+		{Group: "build.openshift.io", Version: "v1", Resource: "buildconfigs"},
+		{Group: "apps.openshift.io", Version: "v1", Resource: "deploymentconfigs"},
+		{Group: "image.openshift.io", Version: "v1", Resource: "imagestreams"},
+		{Group: "image.openshift.io", Version: "v1", Resource: "images"},
+		{Group: "oauth.openshift.io", Version: "v1", Resource: "oauthclientauthorizations"},
+		{Group: "oauth.openshift.io", Version: "v1", Resource: "oauthaccesstokens"},
+		{Group: "oauth.openshift.io", Version: "v1", Resource: "oauthauthorizetokens"},
+		{Group: "oauth.openshift.io", Version: "v1", Resource: "oauthclients"},
+		{Group: "project.openshift.io", Version: "v1", Resource: "projects"},
+		{Group: "quota.openshift.io", Version: "v1", Resource: "clusterresourcequotas"},
+		{Group: "route.openshift.io", Version: "v1", Resource: "routes"},
+		{Group: "network.openshift.io", Version: "v1", Resource: "netnamespaces"},
+		{Group: "network.openshift.io", Version: "v1", Resource: "hostsubnets"},
+		{Group: "network.openshift.io", Version: "v1", Resource: "clusternetworks"},
+		{Group: "network.openshift.io", Version: "v1", Resource: "egressnetworkpolicies"},
+		{Group: "template.openshift.io", Version: "v1", Resource: "templates"},
+		{Group: "user.openshift.io", Version: "v1", Resource: "groups"},
+		{Group: "user.openshift.io", Version: "v1", Resource: "users"},
+		{Group: "user.openshift.io", Version: "v1", Resource: "identities"},
+	} {
+		resourceEncodingConfig.SetResourceEncoding(gvr.GroupResource(), unversioned.GroupVersion{Version: gvr.Version}, unversioned.GroupVersion{Version: runtime.APIVersionInternal})
+	}
+
 	storageFactory.DefaultResourcePrefixes = g.defaultResourcePrefixes
 	g.storageFactory = storageFactory
 

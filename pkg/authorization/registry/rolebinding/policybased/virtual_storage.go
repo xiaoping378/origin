@@ -3,13 +3,13 @@ package policybased
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kapierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/retry"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/runtime"
 
@@ -54,23 +54,23 @@ func (m *VirtualStorage) NewList() runtime.Object {
 }
 
 func (m *VirtualStorage) List(ctx kapi.Context, options *kapi.ListOptions) (runtime.Object, error) {
-	policyBindingList, err := m.BindingRegistry.ListPolicyBindings(ctx, options)
+	policyBindingList, err := m.BindingRegistry.ListPolicyBindings(ctx, &kapi.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	labelSelector, fieldSelector := oapi.ListOptionsToSelectors(options)
+	matcher := rolebindingregistry.Matcher(oapi.ListOptionsToSelectors(options))
 
 	roleBindingList := &authorizationapi.RoleBindingList{}
 	for _, policyBinding := range policyBindingList.Items {
 		for _, roleBinding := range policyBinding.RoleBindings {
-			if labelSelector.Matches(labels.Set(roleBinding.Labels)) &&
-				fieldSelector.Matches(authorizationapi.RoleBindingToSelectableFields(roleBinding)) {
+			if matches, err := matcher.Matches(roleBinding); err == nil && matches {
 				roleBindingList.Items = append(roleBindingList.Items, *roleBinding)
 			}
 		}
 	}
 
+	sort.Sort(byName(roleBindingList.Items))
 	return roleBindingList, nil
 }
 
@@ -338,3 +338,9 @@ func (m *VirtualStorage) getPolicyBindingOwningRoleBinding(ctx kapi.Context, bin
 
 	return nil, kapierrors.NewNotFound(m.Resource, bindingName)
 }
+
+type byName []authorizationapi.RoleBinding
+
+func (r byName) Len() int           { return len(r) }
+func (r byName) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+func (r byName) Less(i, j int) bool { return r[i].Name < r[j].Name }

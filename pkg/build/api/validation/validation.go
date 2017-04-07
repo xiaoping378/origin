@@ -82,7 +82,7 @@ func ValidateBuildUpdate(build *buildapi.Build, older *buildapi.Build) field.Err
 }
 
 func diffBuildSpec(newer buildapi.BuildSpec, older buildapi.BuildSpec) (string, error) {
-	codec := kapi.Codecs.LegacyCodec(v1.SchemeGroupVersion)
+	codec := kapi.Codecs.LegacyCodec(v1.LegacySchemeGroupVersion)
 	newerObj := &buildapi.Build{Spec: newer}
 	olderObj := &buildapi.Build{Spec: older}
 
@@ -202,10 +202,6 @@ const (
 	maxJenkinsfileLengthBytes = 100 * 1000
 )
 
-func hasProxy(source *buildapi.GitBuildSource) bool {
-	return (source.HTTPProxy != nil && len(*source.HTTPProxy) > 0) || (source.HTTPSProxy != nil && len(*source.HTTPSProxy) > 0)
-}
-
 func validateSource(input *buildapi.BuildSource, isCustomStrategy, isDockerStrategy, isJenkinsPipelineStrategyFromRepo bool, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
@@ -273,14 +269,6 @@ func validateSecretRef(ref *kapi.LocalObjectReference, fldPath *field.Path) fiel
 	return allErrs
 }
 
-func isHTTPScheme(in string) bool {
-	u, err := url.Parse(in)
-	if err != nil {
-		return false
-	}
-	return u.Scheme == "http" || u.Scheme == "https"
-}
-
 func validateGitSource(git *buildapi.GitBuildSource, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	if len(git.URI) == 0 {
@@ -293,9 +281,6 @@ func validateGitSource(git *buildapi.GitBuildSource, fldPath *field.Path) field.
 	}
 	if git.HTTPSProxy != nil && len(*git.HTTPSProxy) != 0 && !IsValidURL(*git.HTTPSProxy) {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("httpsproxy"), *git.HTTPSProxy, "proxy is not a valid url"))
-	}
-	if hasProxy(git) && !isHTTPScheme(git.URI) {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("uri"), git.URI, "only http:// and https:// GIT protocols are allowed with HTTP or HTTPS proxy set"))
 	}
 	return allErrs
 }
@@ -500,6 +485,14 @@ func validateDockerStrategy(strategy *buildapi.DockerBuildStrategy, fldPath *fie
 
 	allErrs = append(allErrs, validateSecretRef(strategy.PullSecret, fldPath.Child("pullSecret"))...)
 
+	switch t := strategy.ImageOptimizationPolicy; {
+	case t == nil:
+	case *t == buildapi.ImageOptimizationSkipLayers, *t == buildapi.ImageOptimizationSkipLayersAndWarn,
+		*t == buildapi.ImageOptimizationNone:
+	default:
+		allErrs = append(allErrs, field.Invalid(fldPath.Child("imageOptimizationPolicy"), *t, "must be unset, 'None', 'SkipLayers', or 'SkipLayersAndWarn"))
+	}
+
 	if len(strategy.DockerfilePath) != 0 {
 		cleaned, errs := validateRelativePath(strategy.DockerfilePath, "dockerfilePath", fldPath.Child("dockerfilePath"))
 		allErrs = append(allErrs, errs...)
@@ -563,6 +556,8 @@ func validateJenkinsPipelineStrategy(strategy *buildapi.JenkinsPipelineBuildStra
 		}
 	}
 
+	allErrs = append(allErrs, ValidateStrategyEnv(strategy.Env, fldPath.Child("env"))...)
+
 	return allErrs
 }
 
@@ -580,6 +575,18 @@ func validateTrigger(trigger *buildapi.BuildTriggerPolicy, buildFrom *kapi.Objec
 			allErrs = append(allErrs, field.Required(fldPath.Child("github"), ""))
 		} else {
 			allErrs = append(allErrs, validateWebHook(trigger.GitHubWebHook, fldPath.Child("github"), false)...)
+		}
+	case buildapi.GitLabWebHookBuildTriggerType:
+		if trigger.GitLabWebHook == nil {
+			allErrs = append(allErrs, field.Required(fldPath.Child("gitlab"), ""))
+		} else {
+			allErrs = append(allErrs, validateWebHook(trigger.GitLabWebHook, fldPath.Child("gitlab"), false)...)
+		}
+	case buildapi.BitbucketWebHookBuildTriggerType:
+		if trigger.BitbucketWebHook == nil {
+			allErrs = append(allErrs, field.Required(fldPath.Child("bitbucket"), ""))
+		} else {
+			allErrs = append(allErrs, validateWebHook(trigger.BitbucketWebHook, fldPath.Child("bitbucket"), false)...)
 		}
 	case buildapi.GenericWebHookBuildTriggerType:
 		if trigger.GenericWebHook == nil {

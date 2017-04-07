@@ -3,7 +3,7 @@
 # Targets (see each target for more information):
 #   all: Build code.
 #   build: Build code.
-#   check: Run unit tests.
+#   check: Run verify, build, unit tests and cmd tests.
 #   test: Run all tests.
 #   run: Run all-in-one server
 #   clean: Clean up.
@@ -45,10 +45,16 @@ all build:
 #
 # Example:
 #   make build-tests
-build-tests:
-	hack/build-go.sh test/extended/extended.test
-	hack/build-go.sh test/integration/integration.test -tags='integration docker'
+build-tests: build-extended-test build-integration-test
 .PHONY: build-tests
+
+build-extended-test:
+	hack/build-go.sh test/extended/extended.test
+.PHONY: build-extended-test
+
+build-integration-test:
+	hack/build-go.sh test/integration/integration.test
+.PHONY: build-integration-test
 
 # Run core verification and all self contained tests.
 #
@@ -71,7 +77,7 @@ verify: build
 	{ \
 	hack/verify-gofmt.sh ||r=1;\
 	hack/verify-govet.sh ||r=1;\
-	hack/verify-generated-bootstrap-bindata.sh ||r=1;\
+	hack/verify-generated-bindata.sh ||r=1;\
 	hack/verify-generated-deep-copies.sh ||r=1;\
 	hack/verify-generated-conversions.sh ||r=1;\
 	hack/verify-generated-clientsets.sh ||r=1;\
@@ -101,25 +107,40 @@ verify-commits:
 # Example:
 #   make update
 update: build
-	hack/update-generated-bootstrap-bindata.sh
+	hack/update-generated-bindata.sh
 	hack/update-generated-deep-copies.sh
 	hack/update-generated-conversions.sh
 	hack/update-generated-clientsets.sh
 	hack/update-generated-defaulters.sh
 	hack/update-generated-listers.sh
 	hack/update-generated-openapi.sh
+	hack/update-generated-protobuf.sh
 	hack/update-generated-completions.sh
 	hack/update-generated-docs.sh
-	hack/update-generated-protobuf.sh
 	hack/update-generated-swagger-descriptions.sh
 	hack/update-generated-swagger-spec.sh
 .PHONY: update
+
+# Update all generated artifacts for the API
+#
+# Example:
+#   make update-api
+update-api:
+	hack/update-generated-deep-copies.sh
+	hack/update-generated-conversions.sh
+	hack/update-generated-defaulters.sh
+	hack/update-generated-swagger-descriptions.sh
+	hack/update-generated-protobuf.sh
+	$(MAKE) build
+	hack/update-generated-swagger-spec.sh
+	hack/update-generated-openapi.sh
+.PHONY: update-api
 
 # Build and run the complete test-suite.
 #
 # Example:
 #   make test
-test: test-tools test-integration test-assets test-end-to-end
+test: test-tools test-integration test-end-to-end
 .PHONY: test
 
 # Run unit tests.
@@ -152,6 +173,7 @@ test-integration:
 # Example:
 #   make test-cmd
 test-cmd: build
+	hack/test-util.sh
 	hack/test-cmd.sh
 .PHONY: test-cmd
 
@@ -170,16 +192,6 @@ test-end-to-end: build
 test-tools:
 	hack/test-tools.sh
 .PHONY: test-tools
-
-# Run assets tests.
-#
-# Example:
-#   make test-assets
-test-assets:
-ifeq ($(TEST_ASSETS),true)
-	hack/test-assets.sh
-endif
-.PHONY: test-assets
 
 # Run extended tests.
 #
@@ -257,32 +269,29 @@ install-travis:
 # Build RPMs only for the Linux AMD64 target
 #
 # Args:
-#   BUILD_TESTS: whether or not to build a test RPM, off by default
 #
 # Example:
 #   make build-rpms
 build-rpms:
-	BUILD_TESTS=$(BUILD_TESTS) OS_ONLY_BUILD_PLATFORMS='linux/amd64' hack/build-rpm-release.sh
+	OS_ONLY_BUILD_PLATFORMS='linux/amd64' hack/build-rpm-release.sh
 .PHONY: build-rpms
 
 # Build RPMs for all architectures
 #
 # Args:
-#   BUILD_TESTS: whether or not to build a test RPM, off by default
 #
 # Example:
 #   make build-rpms-redistributable
 build-rpms-redistributable:
-	BUILD_TESTS=$(BUILD_TESTS) hack/build-rpm-release.sh
+	hack/build-rpm-release.sh
 .PHONY: build-rpms-redistributable
 
 # Build a release of OpenShift using tito for linux/amd64 and the images that depend on it.
 #
 # Args:
-#   BUILD_TESTS: whether or not to build a test RPM, off by default
 #
 # Example:
-#   make release-rpms BUILD_TESTS=1
+#   make release-rpms
 release-rpms: clean build-rpms
 	hack/build-images.sh
 	hack/extract-release.sh

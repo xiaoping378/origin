@@ -17,7 +17,6 @@ import (
 	"github.com/openshift/origin/pkg/cmd/admin"
 	"github.com/openshift/origin/pkg/cmd/cli/cmd"
 	"github.com/openshift/origin/pkg/cmd/cli/cmd/cluster"
-	"github.com/openshift/origin/pkg/cmd/cli/cmd/dockerbuild"
 	"github.com/openshift/origin/pkg/cmd/cli/cmd/importer"
 	"github.com/openshift/origin/pkg/cmd/cli/cmd/login"
 	"github.com/openshift/origin/pkg/cmd/cli/cmd/observe"
@@ -100,8 +99,7 @@ func NewCommandCLI(name, fullName string, in io.Reader, out, errout io.Writer) *
 				cmd.NewCmdProject(fullName+" project", f, out),
 				cmd.NewCmdProjects(fullName, f, out),
 				cmd.NewCmdExplain(fullName, f, out, errout),
-				cluster.NewCmdCluster(cluster.ClusterRecommendedName, fullName+" "+cluster.ClusterRecommendedName, f, out, errout),
-				cmd.NewCmdIdle(fullName, f, out, errout),
+				cluster.NewCmdCluster(cluster.ClusterRecommendedName, fullName+" "+cluster.ClusterRecommendedName, f, in, out, errout),
 			},
 		},
 		{
@@ -127,7 +125,7 @@ func NewCommandCLI(name, fullName string, in io.Reader, out, errout io.Writer) *
 				cmd.NewCmdLabel(fullName, f, out),
 				cmd.NewCmdAnnotate(fullName, f, out),
 				cmd.NewCmdExpose(fullName, f, out),
-				cmd.NewCmdDelete(fullName, f, out),
+				cmd.NewCmdDelete(fullName, f, out, errout),
 				cmd.NewCmdScale(fullName, f, out),
 				cmd.NewCmdAutoscale(fullName, f, out),
 				secretcmds,
@@ -160,6 +158,7 @@ func NewCommandCLI(name, fullName string, in io.Reader, out, errout io.Writer) *
 				cmd.NewCmdProcess(fullName, f, in, out, errout),
 				cmd.NewCmdExport(fullName, f, in, out),
 				cmd.NewCmdExtract(fullName, f, in, out, errout),
+				cmd.NewCmdIdle(fullName, f, out, errout),
 				observe.NewCmdObserve(fullName, f, out, errout),
 				policy.NewCmdPolicy(policy.PolicyRecommendedName, fullName+" "+policy.PolicyRecommendedName, f, out, errout),
 				cmd.NewCmdConvert(fullName, f, out),
@@ -196,15 +195,23 @@ func NewCommandCLI(name, fullName string, in io.Reader, out, errout io.Writer) *
 	experimental := &cobra.Command{
 		Use: "ex", // Because this command exposes no description, it will not be shown in help
 	}
-	experimental.AddCommand(
-		dockerbuild.NewCmdDockerbuild(fullName, f, out, errout),
-	)
+	experimental.AddCommand()
 	cmds.AddCommand(experimental)
 
 	if name == fullName {
 		cmds.AddCommand(cmd.NewCmdVersion(fullName, f, out, cmd.VersionOptions{PrintClientFeatures: true}))
 	}
 	cmds.AddCommand(cmd.NewCmdOptions(out))
+
+	if cmds.Flag("namespace") != nil {
+		if cmds.Flag("namespace").Annotations == nil {
+			cmds.Flag("namespace").Annotations = map[string][]string{}
+		}
+		cmds.Flag("namespace").Annotations[cobra.BashCompCustom] = append(
+			cmds.Flag("namespace").Annotations[cobra.BashCompCustom],
+			"__oc_get_namespaces",
+		)
+	}
 
 	return cmds
 }
@@ -282,7 +289,7 @@ func CommandFor(basename string) *cobra.Command {
 	case "kubectl":
 		cmd = NewCmdKubectl(basename, out)
 	default:
-		cmd = NewCommandCLI(basename, basename, in, out, errout)
+		cmd = NewCommandCLI("oc", "oc", in, out, errout)
 	}
 
 	if cmd.UsageFunc() == nil {

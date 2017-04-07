@@ -23,8 +23,6 @@ import (
 var glog = utilglog.ToFile(os.Stderr, 2)
 
 const (
-	OriginalSourceURLAnnotationKey = "openshift.io/original-source-url"
-
 	// containerNamePrefix prefixes the name of containers launched by a build.
 	// We cannot reuse the prefix "k8s" because we don't want the containers to
 	// be managed by a kubelet.
@@ -54,11 +52,7 @@ func buildInfo(build *api.Build, sourceInfo *git.SourceInfo) []KeyValue {
 		{"OPENSHIFT_BUILD_NAMESPACE", build.Namespace},
 	}
 	if build.Spec.Source.Git != nil {
-		sourceURL := build.Spec.Source.Git.URI
-		if originalURL, ok := build.Annotations[OriginalSourceURLAnnotationKey]; ok {
-			sourceURL = originalURL
-		}
-		kv = append(kv, KeyValue{"OPENSHIFT_BUILD_SOURCE", sourceURL})
+		kv = append(kv, KeyValue{"OPENSHIFT_BUILD_SOURCE", build.Spec.Source.Git.URI})
 		if build.Spec.Source.Git.Ref != "" {
 			kv = append(kv, KeyValue{"OPENSHIFT_BUILD_REFERENCE", build.Spec.Source.Git.Ref})
 		}
@@ -149,11 +143,11 @@ func execPostCommitHook(client DockerClient, postCommitSpec api.BuildPostCommitS
 			Memory:     limits.MemoryLimitBytes,
 			MemorySwap: limits.MemorySwap,
 		},
-	}, docker.LogsOptions{
+	}, docker.AttachToContainerOptions{
 		// Stream logs to stdout and stderr.
 		OutputStream: os.Stdout,
 		ErrorStream:  os.Stderr,
-		Follow:       true,
+		Stream:       true,
 		Stdout:       true,
 		Stderr:       true,
 	})
@@ -192,13 +186,20 @@ func retryBuildStatusUpdate(build *api.Build, client client.BuildInterface, sour
 			latestBuild.Spec.Revision = sourceRev
 			latestBuild.ResourceVersion = ""
 		}
-
+		latestBuild.Status.Phase = build.Status.Phase
 		latestBuild.Status.Reason = build.Status.Reason
 		latestBuild.Status.Message = build.Status.Message
+		latestBuild.Status.Output.To = build.Status.Output.To
 
 		if _, err := client.UpdateDetails(latestBuild); err != nil {
 			return err
 		}
 		return nil
 	})
+}
+
+func handleBuildStatusUpdate(build *api.Build, client client.BuildInterface, sourceRev *api.SourceRevision) {
+	if updateErr := retryBuildStatusUpdate(build, client, sourceRev); updateErr != nil {
+		glog.Infof("error: Unable to update build status: %v", updateErr)
+	}
 }
